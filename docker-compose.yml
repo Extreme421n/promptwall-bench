@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: promptwall_bench_pg
+    environment:
+      POSTGRES_USER: promptwall
+      POSTGRES_PASSWORD: promptwall
+      POSTGRES_DB: promptwall_bench
+    ports:
+      - "5544:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U promptwall -d promptwall_bench"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  pgdata:
