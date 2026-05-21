@@ -221,20 +221,31 @@ def test_get_loyalty_balance_not_found(seeded_session: Session) -> None:
 
 
 def test_get_policy_clause_finds_refund_clauses(seeded_session: Session) -> None:
+    # Phase 6B-4: queries policy_clauses joined to policy_documents.
+    # ``policy_topic`` still works via back-compat alias for ``query``.
+    # Phase 6C-1: synonym expansion may surface clauses that talk about
+    # "credit" / "return" instead of the literal word "refund". A relevant
+    # match is either:
+    #   * a textual mention of refund (or its synonyms), OR
+    #   * a clause inside a refund_policy document (policy_type match).
     out = get_policy_clause.call(seeded_session, {"policy_topic": "refund"})
     assert out["count"] >= 1
-    assert all(
-        "refund" in (c["title"] + c["excerpt"]).lower() for c in out["clauses"]
-    )
+    for c in out["clauses"]:
+        haystack = (c["title"] + " " + c["body"]).lower()
+        relevant = (
+            any(kw in haystack for kw in ("refund", "credit", "return"))
+            or c["policy_type"] == "refund_policy"
+        )
+        assert relevant, c
 
 
-def test_get_policy_clause_with_category(seeded_session: Session) -> None:
+def test_get_policy_clause_with_domain_filter(seeded_session: Session) -> None:
     out = get_policy_clause.call(
         seeded_session,
-        {"policy_topic": "baggage", "category": "baggage"},
+        {"query": "refund", "domain": "airline"},
     )
-    assert all(c["category"] == "baggage" for c in out["clauses"])
     assert out["count"] >= 1
+    assert all(c["policy_domain"] == "airline" for c in out["clauses"])
 
 
 def test_get_policy_clause_no_results(seeded_session: Session) -> None:

@@ -1,129 +1,213 @@
-"""Phase C2 KB / policy tools.
+"""search_policy_documents + get_latest_policy_version tools.
 
-* search_policy_documents      — narrower than search_kb_articles; restricted
-                                  to the policy-style categories and returns
-                                  versioned metadata.
-* get_latest_policy_version    — given a slug, return the current version row.
+Phase 6B-4 update: ``search_policy_documents`` now queries the structured
+``policy_documents`` table (Phase 6B-1) rather than the KB articles. The
+``get_latest_policy_version`` tool (Phase C2) still queries KB articles for
+backwards compatibility with existing eval cases.
 """
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date as _date, datetime
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import or_, select
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+from sqlalchemy import and_, case, or_, select
 from sqlalchemy.orm import Session
 
-from app.models import KBArticle
+from app.models import KBArticle, PolicyDocument
+from app.tools._text_search import (
+    expand_query,
+    infer_policy_types,
+    make_excerpt,
+    score_match,
+)
 from app.tools.base import ResourceNotFoundError, Tool
 
 
-# Categories that are policy-document-shaped (vs. how-to / FAQ).
-_POLICY_CATEGORIES = (
-    "baggage",
-    "refunds",
-    "flight_change",
-    "cancellation",
-    "loyalty",
-    "special_assistance",
-)
-
-
 # ---------------------------------------------------------------------------
-# search_policy_documents
+# search_policy_documents — queries policy_documents (Phase 6B-1)
 # ---------------------------------------------------------------------------
 
 
 class SearchPolicyDocumentsInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    query: str = Field(min_length=2)
-    category: Optional[str] = Field(
+    query: str = Field(min_length=2, description="Free-text match on title and body.")
+    domain: Optional[str] = Field(
         default=None,
-        description=(
-            "Optional category filter. One of: " + ", ".join(_POLICY_CATEGORIES)
-        ),
+        description="Optional domain filter (airline / commerce / saas / support / crm).",
+    )
+    policy_type: Optional[str] = Field(
+        default=None,
+        description="Optional policy_type filter (refund_policy / return_policy / …).",
     )
     limit: int = Field(default=10, ge=1, le=25)
 
 
 class PolicyDocumentItem(BaseModel):
-    slug: str
+    id: int
     title: str
-    category: str
-    excerpt: str
+    domain: str
+    policy_type: str
     version: int
+    excerpt: str
+    effective_from: _date
+    effective_to: Optional[_date]
     is_active: bool
-    updated_at: datetime
+    # Phase 6C-1 — retrieval-explanation fields.
+    match_score: float = 0.0
+    match_reason: str = ""
+    matched_fields: list[str] = Field(default_factory=list)
 
 
 class SearchPolicyDocumentsOutput(BaseModel):
     count: int
     documents: list[PolicyDocumentItem]
+    query_terms: list[str] = Field(default_factory=list)
+    fallback_used: bool = False
+    inferred_policy_types: list[str] = Field(default_factory=list)
 
 
 def _excerpt(text: str, max_len: int = 240) -> str:
-    text = " ".join(text.split())
-    return text if len(text) <= max_len else text[: max_len - 1].rstrip() + "…"
+    """Back-compat shim; ``make_excerpt`` is the new canonical helper."""
+    return make_excerpt(text, max_len=max_len)
 
 
-def _search_policy_impl(
+def _build_doc_item(
+    d: PolicyDocument, terms: list[str], inferred: list[str] | None = None
+) -> PolicyDocumentItem:
+    if terms:
+        score, fields, reason = score_match(
+            terms,
+            {
+                "title": d.title,
+                "policy_type": d.policy_type,
+                "body": d.body,
+            },
+        )
+        if inferred and d.policy_type in inferred:
+            score = min(1.0, score * 2.0 + 0.05)
+            if "policy_type" not in fields:
+                fields = ["policy_type"] + fields
+            reason = f"policy_type={d.policy_type} matches inferred query intent; {reason}"
+    else:
+        score, fields, reason = (1.0, ["filter"], "filter-only lookup")
+    return PolicyDocumentItem(
+        id=d.id,
+        title=d.title,
+        domain=d.domain,
+        policy_type=d.policy_type,
+        version=d.version,
+        excerpt=make_excerpt(d.body),
+        effective_from=d.effective_from,
+        effective_to=d.effective_to,
+        is_active=d.is_active,
+        match_score=score,
+        match_reason=reason,
+        matched_fields=fields,
+    )
+
+
+def _search_policy_documents_impl(
     session: Session, inp: SearchPolicyDocumentsInput
 ) -> SearchPolicyDocumentsOutput:
-    pattern = f"%{inp.query.strip()}%"
-    stmt = (
-        select(KBArticle)
-        .where(KBArticle.is_active.is_(True))
-        .where(KBArticle.category.in_(_POLICY_CATEGORIES))
-        .where(or_(KBArticle.title.ilike(pattern), KBArticle.body.ilike(pattern)))
-    )
-    if inp.category is not None:
-        if inp.category not in _POLICY_CATEGORIES:
-            # An explicit category outside the policy set returns no rows
-            # rather than 404 — the chatbot may have guessed.
-            return SearchPolicyDocumentsOutput(count=0, documents=[])
-        stmt = stmt.where(KBArticle.category == inp.category)
-    stmt = stmt.order_by(KBArticle.category, KBArticle.slug).limit(inp.limit)
+    terms = expand_query(inp.query)
+    inferred = infer_policy_types(inp.query)
 
-    rows = session.execute(stmt).scalars().all()
-    return SearchPolicyDocumentsOutput(
-        count=len(rows),
-        documents=[
-            PolicyDocumentItem(
-                slug=a.slug,
-                title=a.title,
-                category=a.category,
-                excerpt=_excerpt(a.body),
-                version=a.version,
-                is_active=a.is_active,
-                updated_at=a.updated_at,
+    base_filters: list = [PolicyDocument.is_active.is_(True)]
+    if inp.domain:
+        base_filters.append(PolicyDocument.domain == inp.domain.strip())
+    if inp.policy_type:
+        base_filters.append(PolicyDocument.policy_type == inp.policy_type.strip())
+
+    primary_filters = list(base_filters)
+    if terms:
+        text_or = or_(
+            or_(*[PolicyDocument.title.ilike(f"%{t}%") for t in terms]),
+            or_(*[PolicyDocument.body.ilike(f"%{t}%") for t in terms]),
+            or_(*[PolicyDocument.policy_type.ilike(f"%{t}%") for t in terms]),
+        )
+        primary_filters.append(text_or)
+
+    # Push inferred policy_type rows to the front of the SQL candidate window.
+    if inferred:
+        type_priority = case(
+            (PolicyDocument.policy_type.in_(inferred), 0),
+            else_=1,
+        )
+        ordering = [
+            type_priority,
+            PolicyDocument.domain,
+            PolicyDocument.policy_type,
+            PolicyDocument.version.desc(),
+        ]
+    else:
+        ordering = [
+            PolicyDocument.domain,
+            PolicyDocument.policy_type,
+            PolicyDocument.version.desc(),
+        ]
+
+    stmt = (
+        select(PolicyDocument)
+        .where(and_(*primary_filters))
+        .order_by(*ordering)
+        # Pull a wider candidate window so the Python re-rank has room.
+        .limit(max(inp.limit * 6, 60))
+    )
+    rows = list(session.execute(stmt).scalars().all())
+
+    fallback_used = False
+    if not rows and inferred:
+        # Fallback: drop the free-text filter and use the inferred policy_type
+        # slug(s) instead. Keeps any domain filter the caller already passed.
+        fb = list(base_filters)
+        if not inp.policy_type:
+            fb.append(PolicyDocument.policy_type.in_(inferred))
+        rows = list(
+            session.execute(
+                select(PolicyDocument)
+                .where(and_(*fb))
+                .order_by(PolicyDocument.version.desc(), PolicyDocument.id)
+                .limit(inp.limit)
             )
-            for a in rows
-        ],
+            .scalars()
+            .all()
+        )
+        fallback_used = bool(rows)
+
+    items = [_build_doc_item(d, terms, inferred) for d in rows]
+    items.sort(key=lambda x: (-x.match_score, x.id))
+    items = items[: inp.limit]
+    return SearchPolicyDocumentsOutput(
+        count=len(items),
+        documents=items,
+        query_terms=terms,
+        fallback_used=fallback_used,
+        inferred_policy_types=inferred,
     )
 
 
 search_policy_documents = Tool(
     name="search_policy_documents",
     description=(
-        "Search active POLICY documents (a strict subset of the KB: baggage, "
-        "refunds, flight_change, cancellation, loyalty, special_assistance). "
-        "Returns versioned policy metadata alongside the matching excerpt. "
-        "Prefer this over search_kb_articles when the user is asking about a "
-        "specific policy."
+        "Search active policy documents from the structured policy_documents "
+        "table by free-text on title/body, optionally narrowed by domain "
+        "(airline/commerce/saas/support/crm) and policy_type (refund_policy, "
+        "baggage_policy, etc.). Returns up to 25 results with excerpts."
     ),
     domain="kb",
     input_schema=SearchPolicyDocumentsInput,
     output_schema=SearchPolicyDocumentsOutput,
     risk_level="low",
     read_only=True,
-    impl=_search_policy_impl,
+    impl=_search_policy_documents_impl,
 )
 
 
 # ---------------------------------------------------------------------------
-# get_latest_policy_version
+# get_latest_policy_version — unchanged from Phase C2 (queries KBArticle)
 # ---------------------------------------------------------------------------
 
 
@@ -132,7 +216,7 @@ class GetLatestPolicyVersionInput(BaseModel):
 
     slug: str = Field(
         min_length=2,
-        description="The policy article slug, e.g. 'baggage-1' or 'refunds-2'.",
+        description="The KB article slug, e.g. 'baggage-1' or 'refunds-2'.",
     )
 
 
@@ -171,9 +255,8 @@ def _latest_version_impl(
 get_latest_policy_version = Tool(
     name="get_latest_policy_version",
     description=(
-        "Return the latest version of a policy document by slug. Useful when "
-        "the user references a specific policy and you need the authoritative "
-        "current copy."
+        "Return the latest version of a KB article by slug. Useful when a "
+        "user references a specific KB slug and you need the current copy."
     ),
     domain="kb",
     input_schema=GetLatestPolicyVersionInput,

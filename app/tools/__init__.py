@@ -62,6 +62,15 @@ from app.tools.support_extras import (
     get_escalation_policy,
     search_support_tickets,
 )
+from app.tools.text_retrieval import (
+    get_active_policy,
+    get_product_warranty_terms,
+    get_support_resolution_template,
+    list_policy_versions,
+    search_internal_agent_notes,
+    search_operational_incidents,
+    search_return_rules,
+)
 
 for _tool in (
     # Phase 1D — the original 8
@@ -107,6 +116,14 @@ for _tool in (
     get_commerce_return_status,
     # Phase C2 — CRM extras
     get_customer_segment,
+    # Phase 6B-4 — textual retrieval tools
+    search_return_rules,
+    get_product_warranty_terms,
+    search_internal_agent_notes,
+    search_operational_incidents,
+    get_support_resolution_template,
+    list_policy_versions,
+    get_active_policy,
 ):
     default_registry.register(_tool)
 
@@ -164,4 +181,12 @@ __all__ = [
     "get_commerce_return_status",
     # Phase C2 — CRM extras
     "get_customer_segment",
+    # Phase 6B-4 — textual retrieval
+    "search_return_rules",
+    "get_product_warranty_terms",
+    "search_internal_agent_notes",
+    "search_operational_incidents",
+    "get_support_resolution_template",
+    "list_policy_versions",
+    "get_active_policy",
 ]

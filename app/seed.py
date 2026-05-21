@@ -45,24 +45,31 @@ from app.models import (
     Customer,
     CustomerOrganization,
     Flight,
+    InternalAgentNote,
     Invoice,
     InvoiceItem,
     KBArticle,
     LoyaltyAccount,
+    OperationalIncident,
     Organization,
     OverageCharge,
     Plan,
+    PolicyClause,
+    PolicyDocument,
     Product,
     ProductAttribute,
     ProductCategory,
     ProductInventory,
     ProductPrice,
+    ProductReturnRule,
+    ProductWarrantyTerms,
     Refund,
     Seat,
     SeatAllocation,
     Shipment,
     Subscription,
     SupportMessage,
+    SupportResolutionTemplate,
     SupportTicket,
     UsageEvent,
     Warehouse,
@@ -108,6 +115,14 @@ SCALES: dict[str, dict[str, int]] = {
         "shipments": 280,
         "commerce_returns": 60,
         "commerce_refunds": 40,
+        # textual knowledge (Phase 6B-2)
+        "policy_documents": 50,
+        "policy_clauses": 300,
+        "product_warranty_terms": 100,
+        "product_return_rules": 100,
+        "internal_agent_notes": 500,
+        "operational_incidents": 50,
+        "support_resolution_templates": 100,
     },
     "medium": {
         "customers": 20_000,
@@ -143,6 +158,14 @@ SCALES: dict[str, dict[str, int]] = {
         "shipments": 28_000,
         "commerce_returns": 6_000,
         "commerce_refunds": 4_000,
+        # textual knowledge (Phase 6B-2)
+        "policy_documents": 500,
+        "policy_clauses": 3_000,
+        "product_warranty_terms": 5_000,
+        "product_return_rules": 1_000,
+        "internal_agent_notes": 50_000,
+        "operational_incidents": 500,
+        "support_resolution_templates": 500,
     },
     "large": {
         "customers": 200_000,
@@ -178,6 +201,14 @@ SCALES: dict[str, dict[str, int]] = {
         "shipments": 280_000,
         "commerce_returns": 60_000,
         "commerce_refunds": 40_000,
+        # textual knowledge (Phase 6B-2)
+        "policy_documents": 2_000,
+        "policy_clauses": 15_000,
+        "product_warranty_terms": 50_000,
+        "product_return_rules": 5_000,
+        "internal_agent_notes": 500_000,
+        "operational_incidents": 5_000,
+        "support_resolution_templates": 2_000,
     },
 }
 
@@ -887,6 +918,36 @@ def seed(
                     "shipments",
                     "commerce_returns",
                     "commerce_refunds",
+                )
+            ),
+            _t0,
+        )
+
+        # -------------------------------------------------------------
+        # Textual knowledge (Phase 6B-2) — runs last so all referenced
+        # IDs (products, categories, customers) already exist.
+        # -------------------------------------------------------------
+        _t0 = time.perf_counter()
+        _seed_knowledge(
+            session=session,
+            counts=counts,
+            customer_ids=customer_ids,
+            rng=rng,
+            fake=fake,
+            summary=summary,
+        )
+        _section(
+            "knowledge/text",
+            sum(
+                summary.get(k, 0)
+                for k in (
+                    "policy_documents",
+                    "policy_clauses",
+                    "product_warranty_terms",
+                    "product_return_rules",
+                    "internal_agent_notes",
+                    "operational_incidents",
+                    "support_resolution_templates",
                 )
             ),
             _t0,
@@ -1742,3 +1803,1215 @@ def _seed_commerce(
         )
     _bulk_insert(session, CommerceRefund, refund_rows)
     summary["commerce_refunds"] = len(refund_rows)
+
+
+# ---------------------------------------------------------------------------
+# Phase 6B-2: textual knowledge seeding
+# ---------------------------------------------------------------------------
+
+
+# 5 domains × 10 policy types = 50 policy combos. Each has:
+# - a domain-appropriate body opener
+# - a list of clause templates that read naturally for that domain
+_POLICY_CATALOG: list[dict[str, Any]] = [
+    # ---- airline ----
+    {
+        "domain": "airline",
+        "policy_type": "refund_policy",
+        "title": "Airline Refund Policy",
+        "body": (
+            "Refunds are issued when the airline cancels a flight, when a "
+            "schedule change exceeds two hours, or under documented medical "
+            "emergencies. Refundable fare classes also qualify for full or "
+            "partial refunds depending on time of cancellation. Processing "
+            "windows: 5–7 business days to original payment method; 1–2 "
+            "billing cycles to appear on a credit card statement."
+        ),
+        "clauses": [
+            ("eligibility", "Eligibility", "Refunds are eligible when the airline cancels a flight, when a schedule change exceeds 2 hours, or under refundable fare conditions.", "high", "all fares", None),
+            ("non_refundable", "Non-refundable fares", "Basic, Saver, and Promo fares are non-refundable but may be eligible for travel credit valid for 12 months from issue.", "normal", "basic/saver/promo", None),
+            ("medical_emergency", "Medical emergency exceptions", "Medical emergencies require a physician's note dated within 30 days. Approval is granted case by case and processed within 10 business days.", "high", "all fares", "Self-attested illness without documentation"),
+            ("processing_time", "Processing time", "Refunds take 5-7 business days for credit cards, 10-14 days for bank transfers. Travel credit is available within 24 hours.", "normal", "all fares", None),
+            ("partial_refund", "Partial refunds", "Partial refunds apply when only some segments of an itinerary are cancelled; unused segments are refunded at face value minus a processing fee.", "normal", "multi-segment itineraries", None),
+            ("currency", "Refund currency", "Refunds are issued in the original currency of purchase. Foreign exchange variation between purchase and refund dates is not compensated.", "normal", "all fares", None),
+        ],
+    },
+    {
+        "domain": "airline",
+        "policy_type": "baggage_policy",
+        "title": "Checked Baggage Policy",
+        "body": (
+            "Checked baggage allowances vary by route type and cabin class. "
+            "Economy international: 1 bag up to 23kg. Business international: "
+            "2 bags up to 32kg each. Domestic flights: 1 bag at half the "
+            "international allowance for the cabin class. Excess baggage is "
+            "billed at the rate published at time of booking."
+        ),
+        "clauses": [
+            ("economy_intl", "Economy international", "Economy passengers on international flights may check one bag up to 23kg and one cabin bag up to 7kg.", "normal", "economy/international", None),
+            ("business_intl", "Business international", "Business class passengers on international flights may check two bags up to 32kg each, plus 12kg cabin bag.", "normal", "business/international", None),
+            ("domestic", "Domestic allowances", "Domestic flights allow one checked bag up to 18kg (economy) or 25kg (business). Cabin bag rules match international.", "normal", "domestic", None),
+            ("excess", "Excess baggage fees", "Excess baggage is billed per kilogram at airport rates which can be 3x the pre-paid online rate.", "high", "all fares", None),
+            ("lost_or_damaged", "Lost or damaged baggage", "Lost or damaged baggage must be reported at the airport baggage desk within 7 days of arrival.", "high", "all fares", "Personal items not in the checked bag"),
+            ("sporting", "Sporting equipment", "Sporting equipment (skis, bikes, golf clubs) requires pre-booking 48 hours before departure and may incur a fixed handling fee.", "normal", "all fares", None),
+        ],
+    },
+    {
+        "domain": "airline",
+        "policy_type": "cancellation_policy",
+        "title": "Cancellation Policy",
+        "body": (
+            "Cancellations follow the rules of the booking class. Voluntary "
+            "cancellations forfeit non-refundable portions; involuntary "
+            "cancellations (caused by the airline) entitle the passenger to a "
+            "full refund or free rebooking on the next available flight."
+        ),
+        "clauses": [
+            ("voluntary", "Voluntary cancellations", "Voluntary cancellations forfeit non-refundable portions and incur a cancellation fee per fare class.", "high", "all fares", None),
+            ("involuntary", "Involuntary cancellations", "If the airline cancels a flight, passengers may choose a full refund or free rebooking on the next available flight.", "high", "all fares", None),
+            ("missed_connection", "Missed connections", "If a delay causes a missed onward connection, the airline rebooks at no charge on the next available flight; meal vouchers issued for waits >4h.", "high", "multi-segment itineraries", "Connections booked separately"),
+            ("rebooking_window", "Rebooking window", "Rebooking on involuntary cancellations is valid for travel within 12 months from the original date.", "normal", "all fares", None),
+        ],
+    },
+    {
+        "domain": "airline",
+        "policy_type": "subscription_policy",
+        "title": "Loyalty Program Terms",
+        "body": (
+            "Loyalty members earn points based on fare class and distance "
+            "flown. Tier qualification is annual and based on calendar-year "
+            "activity. Tier benefits include priority check-in, lounge access, "
+            "and free upgrades on a standby basis."
+        ),
+        "clauses": [
+            ("earning", "Earning points", "Points are earned based on the published earning chart for fare class and distance flown.", "normal", "all members", None),
+            ("redemption", "Redemption", "Points can be redeemed for flights, upgrades, and partner products through the loyalty portal.", "normal", "all members", None),
+            ("expiry", "Expiry", "Points expire 24 months after the last qualifying activity. A single qualifying activity resets the expiry clock.", "high", "all members", None),
+            ("tier_qualification", "Tier qualification", "Tier status is calculated annually based on calendar-year tier-qualifying segments and spend.", "normal", "all members", None),
+            ("standby_upgrades", "Standby upgrades", "Free upgrades for elite tiers are available on a standby basis 24 hours before departure.", "normal", "gold/platinum", None),
+        ],
+    },
+    {
+        "domain": "airline",
+        "policy_type": "warranty_policy",
+        "title": "Service Guarantee",
+        "body": (
+            "We guarantee on-time departure for at least 80% of flights on a "
+            "rolling 90-day basis. Customers affected by delays of >3 hours "
+            "receive a travel voucher valid for 6 months."
+        ),
+        "clauses": [
+            ("delay_compensation", "Delay compensation", "Delays of 3+ hours qualify for a $100 voucher; 6+ hours qualify for $250 and meal credit.", "high", "all fares", "Weather, ATC, force majeure"),
+            ("on_time_definition", "On-time definition", "On-time is defined as departure within 15 minutes of scheduled time per industry standard.", "normal", "all fares", None),
+        ],
+    },
+    {
+        "domain": "airline",
+        "policy_type": "escalation_policy",
+        "title": "Airline Escalation Policy",
+        "body": (
+            "Customer issues are escalated based on severity. Routine inquiries "
+            "are resolved by frontline support within 48 hours. Material "
+            "complaints route to supervisors with same-business-day response."
+        ),
+        "clauses": [
+            ("severity_definitions", "Severity definitions", "Severity 1: safety, regulatory, or media impact. Severity 2: customer financial impact >$500. Severity 3: standard inquiry.", "high", "all tickets", None),
+            ("sla_response", "Response SLA", "Sev1: 1 hour. Sev2: 4 hours. Sev3: 48 hours.", "high", "all tickets", "Outside business hours adds 12h to Sev3"),
+        ],
+    },
+    {
+        "domain": "airline",
+        "policy_type": "payment_policy",
+        "title": "Payment Terms",
+        "body": (
+            "All bookings require full payment at the time of reservation. We "
+            "accept major credit cards, debit cards, and select digital wallets."
+        ),
+        "clauses": [
+            ("chargebacks", "Chargebacks", "Disputed chargebacks invalidate the booking. The customer is responsible for any rebooking fees if the dispute is later reversed.", "high", "all fares", None),
+            ("split_payments", "Split payments", "A single booking can be split across at most two payment methods.", "normal", "all fares", None),
+        ],
+    },
+    {
+        "domain": "airline",
+        "policy_type": "privacy_policy",
+        "title": "Privacy Policy (Airline)",
+        "body": (
+            "We collect personal data necessary to process bookings, including "
+            "passenger name, contact details, and travel document numbers. "
+            "Data is retained per regulatory requirements and shared with "
+            "authorities as required by destination country."
+        ),
+        "clauses": [
+            ("retention", "Retention period", "Booking data is retained for 7 years for tax and regulatory purposes.", "high", "all customers", None),
+            ("third_party", "Third-party sharing", "Passenger data is shared with destination authorities as required by law (e.g. APIS).", "high", "international travel", None),
+        ],
+    },
+    {
+        "domain": "airline",
+        "policy_type": "overage_policy",
+        "title": "Overage / Excess Charges (Airline)",
+        "body": (
+            "Excess baggage, seat upgrades at check-in, and unaccompanied minor "
+            "fees fall under our overage charges schedule, published in the "
+            "fee tariff."
+        ),
+        "clauses": [
+            ("excess_bag", "Excess baggage charges", "Excess baggage is billed per kg at the published airport rate.", "normal", "all fares", None),
+        ],
+    },
+    {
+        "domain": "airline",
+        "policy_type": "return_policy",
+        "title": "Travel Credit Use Policy",
+        "body": (
+            "Travel credits issued from cancellations or vouchers are valid "
+            "for 12 months from issue and can be applied to fares for the "
+            "original passenger or designated family members."
+        ),
+        "clauses": [
+            ("transfer", "Transferability", "Travel credits can be transferred to family members upon written request and presentation of ID.", "normal", "all members", None),
+        ],
+    },
+    # ---- commerce ----
+    {
+        "domain": "commerce",
+        "policy_type": "return_policy",
+        "title": "Commerce Standard Return Policy",
+        "body": (
+            "Most products may be returned within 30 days of delivery for a "
+            "full refund. Items must be unused and in original packaging. "
+            "Categories with hygiene, custom-made, or final-sale designations "
+            "are non-returnable."
+        ),
+        "clauses": [
+            ("window", "Return window", "Standard return window is 30 days from delivery; electronics 14 days; furniture 7 days.", "high", "all categories", None),
+            ("opened_items", "Opened items", "Opened items in resaleable condition may be returned with a 15% restocking fee.", "normal", "non-hygiene categories", None),
+            ("hygiene", "Hygiene exclusions", "Hygiene products (swimwear, undergarments, personal grooming) are non-returnable once seal is broken.", "high", "hygiene", None),
+            ("damaged_packaging", "Damaged packaging", "Damaged packaging must be reported with photos within 48 hours of delivery to qualify for a free replacement.", "high", "all categories", None),
+            ("missing_accessories", "Missing accessories", "Missing accessories (cables, adapters, manuals) must be reported within 7 days; we ship replacements at no cost.", "normal", "electronics/appliances", None),
+            ("final_sale", "Final sale", "Items marked final sale on the product page are non-returnable.", "high", "marked items", None),
+        ],
+    },
+    {
+        "domain": "commerce",
+        "policy_type": "refund_policy",
+        "title": "Commerce Refund Policy",
+        "body": (
+            "Refunds are issued upon receipt of the returned item in "
+            "acceptable condition. Refunds go to the original payment method "
+            "within 5-7 business days. Shipping costs are non-refundable "
+            "except in cases of carrier error or defective product."
+        ),
+        "clauses": [
+            ("processing", "Refund processing", "Refunds are processed within 3 business days of return receipt and inspection.", "normal", "all returns", None),
+            ("shipping_costs", "Shipping costs", "Shipping costs are non-refundable except when the product is defective or shipped in error.", "normal", "all returns", None),
+            ("restocking_fee", "Restocking fee", "A 15% restocking fee applies to opened electronics and 20% to large furniture.", "high", "electronics/furniture", "Defective products"),
+        ],
+    },
+    {
+        "domain": "commerce",
+        "policy_type": "warranty_policy",
+        "title": "Commerce Product Warranty Policy",
+        "body": (
+            "Most products are covered by a manufacturer's warranty for 12-24 "
+            "months. Extended warranties are available for purchase at "
+            "checkout. Damage caused by misuse, modification, or normal wear "
+            "is excluded."
+        ),
+        "clauses": [
+            ("manufacturer", "Manufacturer warranty", "Manufacturer warranty covers defects in materials and workmanship for 12 months from purchase.", "high", "all electronics", None),
+            ("exclusions", "Warranty exclusions", "Physical damage, water exposure, unauthorized modifications, and normal wear-and-tear are excluded from warranty coverage.", "high", "all warranties", None),
+            ("extended", "Extended warranty", "Extended warranty plans can be purchased within 30 days of original purchase and extend coverage to 24 or 36 months.", "normal", "select categories", None),
+        ],
+    },
+    {
+        "domain": "commerce",
+        "policy_type": "cancellation_policy",
+        "title": "Order Cancellation Policy",
+        "body": (
+            "Orders can be cancelled at no charge until they enter the "
+            "warehouse picking process. After picking, the order ships and "
+            "must be processed as a return."
+        ),
+        "clauses": [
+            ("pre_pick", "Before picking", "Orders can be cancelled free of charge while in 'placed' or 'processing' status.", "normal", "all orders", None),
+            ("post_pick", "After picking", "Once an order is in 'shipped' status, it cannot be cancelled and must be returned upon delivery.", "high", "all orders", None),
+        ],
+    },
+    {
+        "domain": "commerce",
+        "policy_type": "payment_policy",
+        "title": "Commerce Payment Terms",
+        "body": (
+            "We accept all major credit cards, debit cards, and digital "
+            "wallets. Charges are authorized at order placement and captured "
+            "at shipment."
+        ),
+        "clauses": [
+            ("authorization", "Authorization vs capture", "Cards are authorized at order placement and captured when the order ships.", "normal", "all orders", None),
+            ("partial_capture", "Partial captures", "Partial shipments result in partial captures matching the value of the shipped items.", "normal", "split shipments", None),
+        ],
+    },
+    {
+        "domain": "commerce",
+        "policy_type": "privacy_policy",
+        "title": "Commerce Privacy Policy",
+        "body": (
+            "We collect order, payment, and shipping data necessary to "
+            "fulfill purchases. Marketing communications require explicit "
+            "opt-in."
+        ),
+        "clauses": [
+            ("marketing", "Marketing communications", "Marketing emails require explicit opt-in. Unsubscribe links are included in every marketing email.", "normal", "all customers", None),
+            ("data_sharing", "Data sharing with carriers", "Shipping addresses and contact info are shared with carriers to complete delivery.", "normal", "all orders", None),
+        ],
+    },
+    {
+        "domain": "commerce",
+        "policy_type": "escalation_policy",
+        "title": "Commerce Escalation Policy",
+        "body": (
+            "Order issues are escalated based on order value and customer "
+            "tier. High-value orders and elite customers receive accelerated "
+            "handling."
+        ),
+        "clauses": [
+            ("high_value", "High-value orders", "Orders over $1,000 are routed to senior support with priority handling.", "high", "high-value orders", None),
+        ],
+    },
+    {
+        "domain": "commerce",
+        "policy_type": "overage_policy",
+        "title": "Commerce Overage / Surcharge Policy",
+        "body": (
+            "Oversized or heavy items may carry shipping surcharges disclosed "
+            "at checkout. Surcharges are calculated by package weight and "
+            "longest dimension and are itemised on the invoice."
+        ),
+        "clauses": [
+            ("oversized", "Oversized shipping surcharge", "Items exceeding 50kg or 1.5m in any dimension carry a $50 oversized handling surcharge.", "normal", "large items", None),
+        ],
+    },
+    {
+        "domain": "commerce",
+        "policy_type": "subscription_policy",
+        "title": "Commerce Subscribe-and-Save Policy",
+        "body": (
+            "Subscribe-and-save orders ship on a recurring schedule with a "
+            "10% discount applied to each recurring shipment."
+        ),
+        "clauses": [
+            ("modification", "Modification window", "Subscription modifications must be made at least 48 hours before the next ship date.", "normal", "all subscriptions", None),
+            ("cancel", "Cancellation", "Subscriptions can be cancelled at any time; no fees apply.", "normal", "all subscriptions", None),
+        ],
+    },
+    {
+        "domain": "commerce",
+        "policy_type": "baggage_policy",
+        "title": "Commerce 'Bag Check' (not applicable)",
+        "body": (
+            "Note: 'Baggage' applies to the airline domain. This entry is "
+            "retained for cross-domain disambiguation testing and contains "
+            "no actual commerce baggage rules."
+        ),
+        "clauses": [
+            ("see_airline", "See airline baggage policy", "For baggage allowances, see the airline domain's baggage_policy document.", "normal", "n/a", None),
+        ],
+    },
+    # ---- saas ----
+    {
+        "domain": "saas",
+        "policy_type": "overage_policy",
+        "title": "SaaS API Overage Policy",
+        "body": (
+            "API call overages above the included plan quota are billed at "
+            "the plan's per-1000-call rate. A 5% grace period applies before "
+            "billing begins; thereafter, overages are billed monthly on the "
+            "next invoice."
+        ),
+        "clauses": [
+            ("grace", "Grace period", "Each plan has a 5% over-quota grace period before overage billing begins.", "normal", "all plans", None),
+            ("rates", "Overage rates", "Starter: $0.50/1k calls. Pro: $0.30/1k. Business: $0.20/1k. Enterprise: $0.10/1k.", "high", "all plans", None),
+            ("hard_cap", "Hard cap", "Hard caps can be configured per organization; once reached, API calls return HTTP 429 until the next billing cycle.", "high", "all plans", "Enterprise tier with negotiated terms"),
+        ],
+    },
+    {
+        "domain": "saas",
+        "policy_type": "subscription_policy",
+        "title": "SaaS Subscription Policy",
+        "body": (
+            "Subscriptions auto-renew monthly or annually depending on the "
+            "selected billing cadence. Cancellation can be done from the "
+            "account page or by contacting support."
+        ),
+        "clauses": [
+            ("auto_renewal", "Auto-renewal", "Subscriptions auto-renew unless cancelled at least 24 hours before the next billing date.", "normal", "all plans", None),
+            ("cancellation", "Cancellation", "Cancellation takes effect at the end of the current billing period; no refunds for the remaining period.", "high", "all plans", "Enterprise contracts with custom terms"),
+            ("downgrade", "Downgrade limitations", "Downgrading to a lower plan may forfeit usage above the new plan's limits. Use the seat reconciliation tool first.", "high", "all plans", None),
+        ],
+    },
+    {
+        "domain": "saas",
+        "policy_type": "payment_policy",
+        "title": "SaaS Payment Terms",
+        "body": (
+            "Invoices are due on the 1st of each month. Failed payments "
+            "trigger an automated retry sequence followed by suspension."
+        ),
+        "clauses": [
+            ("invoice_due", "Invoice due dates", "Monthly invoices are due on issue date + 14 days. Annual contracts are due on issue date + 30 days.", "high", "all plans", None),
+            ("failed_payment", "Failed payments", "Failed payments retry on days 1, 3, 5, 7. After 4 failures, the account is suspended until payment resolves.", "high", "all plans", None),
+            ("disputes", "Invoice disputes", "Invoice disputes must be raised within 30 days of issue. Disputed amounts are held pending resolution.", "high", "all plans", None),
+        ],
+    },
+    {
+        "domain": "saas",
+        "policy_type": "privacy_policy",
+        "title": "SaaS Privacy Policy",
+        "body": (
+            "Customer data is processed per the data processing addendum. "
+            "We do not sell customer data and provide audit logs on request "
+            "for enterprise customers."
+        ),
+        "clauses": [
+            ("dpa", "Data processing addendum", "Enterprise customers receive a signed DPA on request; SCCs are included for EEA transfers.", "high", "enterprise", None),
+            ("audit_logs", "Audit logs", "Audit logs are retained for 90 days on standard plans, 365 days on enterprise.", "normal", "all plans", None),
+        ],
+    },
+    {
+        "domain": "saas",
+        "policy_type": "escalation_policy",
+        "title": "SaaS Incident Escalation",
+        "body": (
+            "Incidents are classified P1-P4. P1 is a full outage affecting "
+            "all tenants; P4 is a documentation question."
+        ),
+        "clauses": [
+            ("p1_definition", "P1 definition", "P1: full outage affecting all tenants OR a customer-impacting security incident. Pages on-call immediately.", "high", "all customers", None),
+            ("sla", "Incident SLA", "P1: 15min ack, 1hr first update. P2: 1hr ack, 4hr update. P3: 1 business day. P4: 3 business days.", "high", "all customers", None),
+        ],
+    },
+    {
+        "domain": "saas",
+        "policy_type": "refund_policy",
+        "title": "SaaS Credit / Refund Policy",
+        "body": (
+            "We do not offer cash refunds for subscriptions. Service credits "
+            "are issued for SLA breaches per the published SLA agreement."
+        ),
+        "clauses": [
+            ("credits", "Service credits", "Service credits are issued for SLA breaches at the rate of 10% of the monthly subscription per hour of downtime, capped at 50%.", "high", "all paid plans", "Promotional credits"),
+            ("no_cash", "No cash refunds", "Subscription fees are non-refundable. Service credits are applied against the next invoice.", "high", "all paid plans", None),
+        ],
+    },
+    {
+        "domain": "saas",
+        "policy_type": "warranty_policy",
+        "title": "SaaS Service Level Agreement",
+        "body": (
+            "We commit to 99.9% uptime measured monthly. SLA breaches result "
+            "in service credits per the credit policy."
+        ),
+        "clauses": [
+            ("uptime_target", "Uptime target", "Monthly uptime target is 99.9% (43 minutes of downtime per month maximum).", "high", "all paid plans", None),
+            ("scheduled_maintenance", "Scheduled maintenance", "Scheduled maintenance windows are excluded from downtime calculations when announced 7+ days in advance.", "normal", "all customers", None),
+        ],
+    },
+    {
+        "domain": "saas",
+        "policy_type": "cancellation_policy",
+        "title": "SaaS Cancellation Policy",
+        "body": (
+            "Customers can cancel via the account page or by contacting "
+            "support. Annual plans paid up front are not refunded for the "
+            "unused portion."
+        ),
+        "clauses": [
+            ("end_of_period", "End-of-period cancellation", "Cancellation takes effect at the end of the current billing period.", "normal", "all plans", None),
+        ],
+    },
+    {
+        "domain": "saas",
+        "policy_type": "return_policy",
+        "title": "SaaS Refund / Return (n/a)",
+        "body": (
+            "SaaS subscriptions are intangible products and are not 'returned'. "
+            "Refund-like behaviour is handled via the SaaS refund policy."
+        ),
+        "clauses": [
+            ("see_refund", "See refund policy", "For credits and refund-like remedies, see the SaaS refund policy document.", "normal", "all plans", None),
+        ],
+    },
+    {
+        "domain": "saas",
+        "policy_type": "baggage_policy",
+        "title": "SaaS 'Baggage' (cross-domain only)",
+        "body": (
+            "This entry exists to surface the cross-domain 'seat'/'baggage' "
+            "vocabulary collision. SaaS does not have a baggage policy."
+        ),
+        "clauses": [
+            ("seats_meaning", "SaaS seats vs airline seats", "In SaaS context, 'seats' refers to user seats on an organization's plan. For airline seats, see the airline baggage and seat-selection policies.", "high", "all plans", None),
+        ],
+    },
+    # ---- support ----
+    {
+        "domain": "support",
+        "policy_type": "escalation_policy",
+        "title": "Support Escalation Policy",
+        "body": (
+            "Support tickets are triaged by priority: low/normal/high/urgent. "
+            "Each priority has defined SLAs and escalation paths."
+        ),
+        "clauses": [
+            ("priority_definitions", "Priority definitions", "Urgent: safety/operational impact. High: material customer financial impact. Normal: routine inquiry. Low: documentation/educational.", "high", "all tickets", None),
+            ("sla", "Response SLAs", "Urgent: 1 hour. High: 4 hours. Normal: 24 hours. Low: 48 hours.", "high", "all tickets", "Outside business hours adds 12h to Normal/Low"),
+            ("manual_review", "Manual review", "Refunds above $500 require manual review by a supervisor.", "high", "refund tickets", None),
+            ("retention", "Retention escalation", "Tickets from VIP / corporate customers are auto-escalated to senior support.", "normal", "VIP / corporate", None),
+        ],
+    },
+    {
+        "domain": "support",
+        "policy_type": "refund_policy",
+        "title": "Support Refund Approval Process",
+        "body": (
+            "Refund requests flow through automated checks first; manual "
+            "review applies to refunds above defined thresholds."
+        ),
+        "clauses": [
+            ("auto_approve", "Auto-approval", "Refunds under $100 with documented eligibility are auto-approved within 24 hours.", "normal", "all tickets", None),
+            ("manual_threshold", "Manual review threshold", "Refunds at or above $500 require supervisor approval and documentation.", "high", "all tickets", None),
+            ("fraud_review", "Fraud review", "Refunds flagged by fraud signals route to the risk team for investigation before approval.", "high", "flagged tickets", None),
+        ],
+    },
+    {
+        "domain": "support",
+        "policy_type": "privacy_policy",
+        "title": "Support Privacy Policy",
+        "body": (
+            "Support communication is logged for quality and training. "
+            "Customers may request access to or deletion of their support "
+            "history per privacy regulations."
+        ),
+        "clauses": [
+            ("logging", "Communication logging", "Email, chat, and call transcripts are logged for up to 24 months for quality and dispute resolution.", "normal", "all tickets", None),
+            ("dsar", "Data subject access", "Customers may request a copy of their support records at any time; we respond within 30 days.", "high", "all customers", None),
+        ],
+    },
+    {
+        "domain": "support",
+        "policy_type": "cancellation_policy",
+        "title": "Support Case Closure Policy",
+        "body": (
+            "Tickets are closed after resolution and customer confirmation. "
+            "Unconfirmed tickets auto-close after 14 days of inactivity."
+        ),
+        "clauses": [
+            ("auto_close", "Auto-close window", "Tickets with no customer activity for 14 days auto-close. The customer can reopen within 30 days.", "normal", "all tickets", None),
+        ],
+    },
+    {
+        "domain": "support",
+        "policy_type": "payment_policy",
+        "title": "Support Goodwill Credits Policy",
+        "body": (
+            "Goodwill credits compensate for service failures and are issued "
+            "at the discretion of support agents within published limits."
+        ),
+        "clauses": [
+            ("limits", "Per-issue limits", "Frontline agents may issue credits up to $50 without supervisor approval. $50-$200 requires supervisor sign-off.", "high", "all agents", None),
+        ],
+    },
+    {
+        "domain": "support",
+        "policy_type": "overage_policy",
+        "title": "Support Goodwill Overage Tracking",
+        "body": (
+            "Goodwill credits exceeding the published per-customer cap trigger "
+            "an alert to the retention team for review."
+        ),
+        "clauses": [
+            ("cap", "Customer cap", "No more than $500 of goodwill credit per customer per rolling 12 months without retention team approval.", "high", "all agents", None),
+        ],
+    },
+    {
+        "domain": "support",
+        "policy_type": "warranty_policy",
+        "title": "Support Resolution Guarantee",
+        "body": (
+            "Our support guarantee: a first response within SLA and a clear "
+            "path to resolution communicated by the second response."
+        ),
+        "clauses": [
+            ("first_response", "First response", "First response time matches the priority SLA. Auto-responses do not count as a first response.", "high", "all tickets", None),
+        ],
+    },
+    {
+        "domain": "support",
+        "policy_type": "return_policy",
+        "title": "Support Re-open Policy",
+        "body": (
+            "Customers may re-open a resolved ticket within 30 days of "
+            "closure. Reopened tickets keep the original ticket number."
+        ),
+        "clauses": [
+            ("window", "Re-open window", "Re-open within 30 days; after that, a new ticket is created.", "normal", "all tickets", None),
+        ],
+    },
+    {
+        "domain": "support",
+        "policy_type": "subscription_policy",
+        "title": "Support Premium Tier Policy",
+        "body": (
+            "Premium support is a paid add-on that includes accelerated SLAs "
+            "and a named technical account manager."
+        ),
+        "clauses": [
+            ("sla_uplift", "SLA uplift", "Premium support cuts SLA response times by 50% across all priorities.", "high", "premium customers", None),
+        ],
+    },
+    {
+        "domain": "support",
+        "policy_type": "baggage_policy",
+        "title": "Support 'Baggage' (cross-domain disambiguation)",
+        "body": (
+            "Support agents handling baggage-related questions should route "
+            "to the airline domain's baggage policy."
+        ),
+        "clauses": [
+            ("route", "Route to airline", "Baggage questions on support tickets must reference the airline domain's baggage_policy document.", "normal", "support agents", None),
+        ],
+    },
+    # ---- crm ----
+    {
+        "domain": "crm",
+        "policy_type": "privacy_policy",
+        "title": "Customer Data Privacy Policy",
+        "body": (
+            "Customer personal data is processed under the privacy notice. "
+            "Customers have rights to access, correct, and delete their data "
+            "subject to legal retention requirements."
+        ),
+        "clauses": [
+            ("retention", "Retention", "Personal data is retained for 7 years after the last interaction for regulatory purposes.", "high", "all customers", "Legal hold or active dispute"),
+            ("deletion_request", "Deletion requests", "Customers may request deletion; we respond within 30 days and confirm scope before action.", "high", "all customers", None),
+        ],
+    },
+    {
+        "domain": "crm",
+        "policy_type": "subscription_policy",
+        "title": "Customer Marketing Preferences",
+        "body": (
+            "Customers can manage marketing preferences from the account "
+            "page. Transactional emails are sent regardless of marketing "
+            "preferences."
+        ),
+        "clauses": [
+            ("opt_in", "Marketing opt-in", "Marketing communications require explicit opt-in. Opt-in status is recorded with timestamp and source.", "high", "all customers", None),
+            ("transactional", "Transactional emails", "Transactional emails (orders, bookings, billing) are always sent and cannot be opted out of.", "normal", "all customers", None),
+        ],
+    },
+    {
+        "domain": "crm",
+        "policy_type": "escalation_policy",
+        "title": "VIP / Risk Escalation",
+        "body": (
+            "VIP customers receive accelerated handling. Customers flagged "
+            "for risk receive additional verification before changes."
+        ),
+        "clauses": [
+            ("vip_handling", "VIP handling", "Customers tagged VIP receive senior support routing automatically.", "high", "VIP customers", None),
+            ("risk_flag", "Risk flag verification", "Customers flagged for risk require ID verification before account changes.", "high", "flagged customers", None),
+        ],
+    },
+    {
+        "domain": "crm",
+        "policy_type": "payment_policy",
+        "title": "Customer Payment Methods on File",
+        "body": (
+            "Payment methods stored on the customer profile are tokenized "
+            "and PCI-compliant. Customers can add, update, or remove payment "
+            "methods at any time."
+        ),
+        "clauses": [
+            ("storage", "Tokenized storage", "Payment methods are stored as tokens; full card numbers are never retained.", "high", "all customers", None),
+        ],
+    },
+    {
+        "domain": "crm",
+        "policy_type": "refund_policy",
+        "title": "Customer-Level Refund Eligibility",
+        "body": (
+            "Refund eligibility considers customer history. Repeated refund "
+            "requests trigger a review by the retention team."
+        ),
+        "clauses": [
+            ("history_check", "Refund history check", "Refunds beyond the 3rd in a rolling 12 months trigger a retention team review.", "high", "all customers", None),
+        ],
+    },
+    {
+        "domain": "crm",
+        "policy_type": "cancellation_policy",
+        "title": "Customer Account Closure",
+        "body": (
+            "Account closure deletes personal data per the retention policy "
+            "and cancels active subscriptions. Pending refunds are honored."
+        ),
+        "clauses": [
+            ("data_handling", "Data on closure", "On account closure, identifying data is deleted within 30 days; transactional history is retained per regulatory retention.", "high", "all customers", None),
+        ],
+    },
+    {
+        "domain": "crm",
+        "policy_type": "return_policy",
+        "title": "Customer-Wide Return Eligibility",
+        "body": (
+            "Customers with abnormally high return rates may be flagged for "
+            "review by the fraud team."
+        ),
+        "clauses": [
+            ("threshold", "Return rate threshold", "Return rates above 40% in any 90-day window trigger a fraud team review.", "high", "all customers", None),
+        ],
+    },
+    {
+        "domain": "crm",
+        "policy_type": "warranty_policy",
+        "title": "Customer Service Warranty Tracking",
+        "body": (
+            "Customer-level warranty tracking records all extended warranties "
+            "purchased and links them to the original product purchase."
+        ),
+        "clauses": [
+            ("linkage", "Product linkage", "Extended warranties are linked to the original order_item_id for traceability.", "normal", "all customers", None),
+        ],
+    },
+    {
+        "domain": "crm",
+        "policy_type": "overage_policy",
+        "title": "Customer-Level Overage Aggregation",
+        "body": (
+            "Where a customer maintains multiple SaaS organizations, overages "
+            "are aggregated at the customer level for retention review."
+        ),
+        "clauses": [
+            ("aggregation", "Cross-org aggregation", "Customers with overages exceeding $1,000 across organizations in a month trigger retention outreach.", "high", "multi-org customers", None),
+        ],
+    },
+    {
+        "domain": "crm",
+        "policy_type": "baggage_policy",
+        "title": "Customer 'Baggage' (cross-domain disambiguation)",
+        "body": (
+            "Cross-domain disambiguation note: customer-level baggage tags "
+            "do not exist; route to the airline domain's baggage policy."
+        ),
+        "clauses": [
+            ("route", "Route to airline", "Customer-level baggage questions must use the airline domain's baggage_policy.", "normal", "all customers", None),
+        ],
+    },
+]
+
+
+# Warranty templates per warranty_type
+_WARRANTY_TEMPLATES = [
+    {
+        "warranty_type": "manufacturer_standard",
+        "duration_months": 12,
+        "body_template": (
+            "Manufacturer's standard warranty covering defects in materials "
+            "and workmanship for 12 months from date of purchase. Coverage "
+            "includes free repair or replacement of defective parts. "
+            "Customers must retain the original receipt and product packaging."
+        ),
+        "exclusions": "Physical damage, water exposure, unauthorized modifications, normal wear and tear, cosmetic damage.",
+    },
+    {
+        "warranty_type": "manufacturer_extended",
+        "duration_months": 24,
+        "body_template": (
+            "Extended manufacturer's warranty covering defects in materials "
+            "and workmanship for 24 months. Includes free shipping for "
+            "warranty claims within the United States."
+        ),
+        "exclusions": "Physical damage, water exposure, software issues, accessory failures, and consumable parts (batteries, fuses).",
+    },
+    {
+        "warranty_type": "premium_extended",
+        "duration_months": 36,
+        "body_template": (
+            "Premium extended warranty for 36 months including accidental "
+            "damage protection. Covers one accidental damage incident per "
+            "12-month period with a $50 service fee."
+        ),
+        "exclusions": "Loss or theft, intentional damage, software-related issues, modifications voiding the warranty.",
+    },
+    {
+        "warranty_type": "limited_lifetime",
+        "duration_months": 240,  # 20 years; treat as 'lifetime'
+        "body_template": (
+            "Limited lifetime warranty for the original purchaser. Covers "
+            "structural defects in materials and workmanship for the useful "
+            "life of the product, defined as 20 years."
+        ),
+        "exclusions": "Wear-and-tear, fading, fabric pilling, and damage from normal use.",
+    },
+    {
+        "warranty_type": "no_warranty",
+        "duration_months": 0,
+        "body_template": (
+            "This product is sold without warranty. Final sale. Refunds and "
+            "returns follow the product return policy only."
+        ),
+        "exclusions": "All claims; product is sold as-is.",
+    },
+    {
+        "warranty_type": "third_party",
+        "duration_months": 12,
+        "body_template": (
+            "Third-party warranty administered by the manufacturer directly. "
+            "Customers must contact the manufacturer using the warranty card "
+            "shipped with the product."
+        ),
+        "exclusions": "Coverage subject to the third-party warranty terms; we do not handle claims directly.",
+    },
+]
+
+
+# Return rule templates per category
+_RETURN_RULE_TEMPLATES = [
+    {
+        "rule_name": "Standard 30-day return",
+        "body": (
+            "Items in this category may be returned within 30 days of "
+            "delivery for a full refund. Items must be in original packaging "
+            "and unused. Return shipping is the customer's responsibility "
+            "unless the item is defective."
+        ),
+        "opened_item_allowed": True,
+        "return_window_days": 30,
+        "restocking_fee_percent": Decimal("0.00"),
+        "exceptions": "Final sale items, promotional bundles.",
+    },
+    {
+        "rule_name": "Electronics — 14-day return",
+        "body": (
+            "Electronics may be returned within 14 days of delivery. Opened "
+            "items in resaleable condition are accepted with a 15% restocking "
+            "fee. Items with broken seals, water damage, or evidence of "
+            "modification are non-returnable."
+        ),
+        "opened_item_allowed": True,
+        "return_window_days": 14,
+        "restocking_fee_percent": Decimal("15.00"),
+        "exceptions": "Broken seals, water damage, unauthorized modifications, missing serial number.",
+    },
+    {
+        "rule_name": "Furniture — 7-day inspection",
+        "body": (
+            "Furniture must be inspected at delivery; visible damage must be "
+            "noted on the delivery receipt. Returns accepted within 7 days, "
+            "subject to a 20% restocking fee and customer-paid return shipping."
+        ),
+        "opened_item_allowed": True,
+        "return_window_days": 7,
+        "restocking_fee_percent": Decimal("20.00"),
+        "exceptions": "Custom-made or made-to-order furniture (non-returnable).",
+    },
+    {
+        "rule_name": "Hygiene — non-returnable once opened",
+        "body": (
+            "Hygiene products (swimwear, undergarments, personal grooming, "
+            "earphones with in-ear tips) are non-returnable once the seal or "
+            "packaging is broken. Unopened items in original packaging may be "
+            "returned within 30 days."
+        ),
+        "opened_item_allowed": False,
+        "return_window_days": 30,
+        "restocking_fee_percent": Decimal("0.00"),
+        "exceptions": "Items shipped damaged or incorrect.",
+    },
+    {
+        "rule_name": "Damaged packaging — photo within 48 hours",
+        "body": (
+            "Items received with damaged packaging must be photographed and "
+            "reported within 48 hours of delivery. Approved claims receive a "
+            "free replacement or full refund."
+        ),
+        "opened_item_allowed": True,
+        "return_window_days": 30,
+        "restocking_fee_percent": Decimal("0.00"),
+        "exceptions": "Damage reported after 48 hours.",
+    },
+    {
+        "rule_name": "Missing accessories — 7-day report",
+        "body": (
+            "Missing accessories (cables, adapters, manuals, remotes) must be "
+            "reported within 7 days of delivery. We ship replacements at no "
+            "cost without requiring the main item to be returned."
+        ),
+        "opened_item_allowed": True,
+        "return_window_days": 7,
+        "restocking_fee_percent": Decimal("0.00"),
+        "exceptions": "Accessories noted as 'not included' on the product page.",
+    },
+    {
+        "rule_name": "Final sale — non-returnable",
+        "body": (
+            "Items marked as final sale on the product page are non-returnable "
+            "regardless of condition. The final-sale designation is clearly "
+            "indicated at the time of purchase."
+        ),
+        "opened_item_allowed": False,
+        "return_window_days": 0,
+        "restocking_fee_percent": Decimal("100.00"),
+        "exceptions": "Items shipped damaged.",
+    },
+    {
+        "rule_name": "Books — strict packaging",
+        "body": (
+            "Books and printed materials must be returned in the exact "
+            "original packaging with no markings, dog-ears, or spine creases. "
+            "Returns are processed within 14 days of receipt."
+        ),
+        "opened_item_allowed": True,
+        "return_window_days": 30,
+        "restocking_fee_percent": Decimal("0.00"),
+        "exceptions": "Books with any visible use or damage.",
+    },
+]
+
+
+# Customer note templates
+_NOTE_TEMPLATES = [
+    ("vip_handling", "VIP customer with multiple high-value bookings in the last 12 months. Always route to senior support. Preferences: window seat, vegetarian meal."),
+    ("previous_complaint", "Customer raised a complaint about delayed refund processing on {related_type} {related_id}. Resolved with a $50 goodwill credit on 2026-02-14. Do not re-issue without supervisor approval."),
+    ("special_handling", "Customer is a corporate travel arranger; bookings may include up to 12 passengers. Confirm passenger list against authorization list before changes."),
+    ("retention_offer", "Retention offer extended on 2026-03-02: 20% off next 3 months. Valid until 2026-06-30. Mention only if customer raises pricing concern."),
+    ("fraud_review", "Account flagged by fraud signals in March 2026 (multiple cards, mismatched billing/shipping). Cleared after manual review. Continue routine monitoring."),
+    ("unresolved_issue", "Customer reports lost baggage on flight in February 2026; carrier compensation pending. Follow up monthly until closed."),
+    ("language_preference", "Customer prefers Spanish-language communications. Account flag set 2026-01-15."),
+    ("accessibility", "Customer requires wheelchair assistance; auto-add to every booking. Confirmed 2026-04-10."),
+    ("payment_issue", "Two failed payments in March 2026 due to expired card. Customer updated payment method on 2026-04-01. Watch for repeated failures."),
+    ("loyalty_status", "Loyalty status escalated to Platinum on 2026-01-30 due to corporate program. Apply Platinum benefits regardless of mileage thresholds."),
+    ("escalation_history", "Customer escalated to supervisor twice in 2025 over flight changes. Notes from 2025-11-20 indicate frustration with rebooking policy."),
+    ("subscription_downgrade", "Customer requested downgrade from Pro to Starter on 2026-02-28. Downgrade effective 2026-03-31. Watch for seat reconciliation issues."),
+    ("commerce_dispute", "Customer disputed order {related_type} {related_id} as 'not received'; carrier proof of delivery on file. Future disputes require additional verification."),
+    ("invoice_dispute", "Open invoice dispute on {related_id}: customer claims overage was already paid. Investigating with billing team."),
+    ("courtesy_extension", "Granted a one-time courtesy extension on 2026-02-22 for return window from 30 to 45 days. Do not repeat without supervisor approval."),
+    ("manual_review_required", "Refunds above $500 on this account require manual review until 2026-12-31."),
+    ("legal_hold", "Account under legal hold; do not modify, delete, or merge. Contact legal@democorp.example before any action."),
+    ("internal_test_account", "Internal test account used by engineering. Real PII fields are synthetic. Do not use for support training samples."),
+    ("communications_preference", "Customer prefers email over phone. Phone number on file is for emergencies only."),
+    ("vacation_hold", "Customer is on a 30-day vacation hold for SaaS organization {related_id} from 2026-05-01 to 2026-05-31."),
+]
+
+
+# Operational incident templates
+_INCIDENT_TEMPLATES = [
+    ("airline", "delayed_flight_data_update", "Delayed flight data update — JFK ATC issue", "Flight status updates for JFK departures were delayed by ~12 minutes between 09:14 and 10:42 UTC due to an ATC interface latency. Customer-facing status reflected stale data during that window; agents instructed to verify status manually."),
+    ("airline", "weather_disruption", "Nor'easter — JFK widespread cancellations", "Severe weather disrupted JFK operations from 06:00 to 18:00 UTC. ~14,000 passengers affected. Refund/rebooking waiver granted automatically; manual handling for elite tier and multi-segment itineraries."),
+    ("airline", "system_outage", "Booking system slow response", "Booking system saw elevated latency (p95 4.2s vs target 1s) for ~45 minutes due to upstream auth service degradation. Tickets not lost; users intermittently retried. Backend now healthy."),
+    ("commerce", "payment_processor_outage", "Stripe outage — partial payment failures", "Stripe reported a regional incident from 14:00 to 14:45 UTC. ~3% of US-east orders failed at checkout. Affected customers received an apology email and a $10 voucher. No data loss."),
+    ("commerce", "inventory_sync_delay", "Inventory sync lag — overselling risk", "Warehouse inventory sync to the product catalog lagged by ~6 hours due to a stuck Kafka consumer. Sold-out items briefly displayed as available. Pulled affected SKUs from catalog; ETL restarted."),
+    ("commerce", "shipping_carrier_strike", "UPS strike — extended shipping windows", "UPS labor action affected ~22% of east-coast shipments in late April. Communicated revised delivery windows to all affected customers; offered free expedited reshipping if requested."),
+    ("commerce", "tax_calculation_bug", "Tax calculation bug — overcharged orders", "Tax calculation rounded incorrectly for orders shipped to certain ZIP codes in CA. Affected ~2,300 orders; refunds processed automatically over 5 days."),
+    ("saas", "billing_export_issue", "Billing CSV export missing line items", "Monthly billing CSV export omitted overage line items for ~8% of organizations in the Mar 2026 cycle. Re-issued corrected CSVs; emailed affected enterprise contacts."),
+    ("saas", "api_rate_limit_misfire", "API rate limit misfire — false 429s", "Misconfiguration in the rate-limit service caused false 429 responses on ~0.2% of requests for 23 minutes. Auto-retry logic in the SDK masked the impact for most callers."),
+    ("saas", "subscription_renewal_failure", "Renewal job failure — 41 orgs not renewed", "Scheduled renewal job failed silently on 2026-04-01 due to an SSL cert rotation issue. 41 organizations were technically lapsed for 6 hours. Re-renewed retroactively with no service interruption."),
+    ("saas", "audit_log_gap", "Audit log gap — 18 minute window", "Audit log ingestion paused for 18 minutes due to a downstream Elastic indexing backlog. Backfilled from the WAL; integrity verified."),
+    ("support", "support_sla_backlog", "Support SLA backlog after promo launch", "Support backlog exceeded 4-hour SLA for high-priority tickets during the spring promo launch. Brought 4 senior agents on overtime; backlog cleared within 36 hours."),
+    ("support", "chat_widget_outage", "Chat widget outage — 35 minutes", "In-app chat widget was unreachable from 17:00 to 17:35 UTC due to a CDN misconfiguration. Tickets falling through to email channel; agent capacity adjusted."),
+    ("crm", "marketing_email_misfire", "Marketing email misfire — opt-out leak", "Marketing email blast inadvertently included ~120 customers who had opted out of marketing. Sent apology + reaffirmed opt-out. DPO informed."),
+    ("crm", "dsar_response_delay", "DSAR response delayed past 30-day SLA", "Two data subject access requests took 34 and 36 days respectively due to backlog. Both fulfilled; root cause: missing automation for SaaS-side data export."),
+]
+
+
+# Support resolution templates (the chatbot/agent reuses these)
+_SUPPORT_RESOLUTION_TEMPLATES = [
+    ("refund_delay", "Refund processing delay — standard response", "Hi {first_name}, thanks for your patience. Refunds typically take 5-7 business days to process, with an additional 1-2 billing cycles to appear on your statement. I checked your refund on {related_id} and confirmed it is in 'processing' status. Expected to land by {expected_date}.", False),
+    ("refund_status_check", "Refund status — explicit check", "Hi {first_name}, your refund on {related_id} is currently {status}. Expected resolution date: {expected_date}. Refunds go to the original payment method automatically; no further action needed on your end.", False),
+    ("baggage_lost_claim", "Lost baggage — claim filing", "Hi {first_name}, sorry to hear about the lost baggage on your flight. I've filed claim #{claim_id} with our baggage team. You should receive an update within 5 business days. Please keep your baggage tag if you still have it.", True),
+    ("flight_change_self_service", "Self-service flight change instructions", "Hi {first_name}, you can change your flight self-service through the 'Manage Booking' section on our site. Use booking reference {pnr}. The change fee depends on cabin class and how close to departure the change is made.", False),
+    ("flight_change_assisted", "Assisted flight change", "Hi {first_name}, I can help with your flight change on booking {pnr}. There is a change fee of ${fee} plus any fare difference. Would you like me to walk you through the available options?", False),
+    ("baggage_allowance_question", "Baggage allowance question", "Hi {first_name}, on a {cabin_class} ticket for an {route_type} flight, your checked baggage allowance is {kg}kg. Cabin baggage: {cabin_kg}kg. Excess baggage is billed per kg at airport rates.", False),
+    ("cancellation_request", "Cancellation request", "Hi {first_name}, I can cancel your booking {pnr}. Based on the fare class, you'll receive a refund of ${refund_amount} to your original payment method within 5-7 business days. Would you like me to proceed?", True),
+    ("loyalty_points_missing", "Missing loyalty points claim", "Hi {first_name}, sorry for the inconvenience. I can help retroactively credit points for a recent flight. Could you confirm the booking reference and travel date? Claims must be filed within 6 months of the flight.", False),
+    ("commerce_order_status", "Commerce order status update", "Hi {first_name}, your order {order_number} is currently {status}. Tracking number {tracking_number} via {carrier}. Estimated delivery: {estimated_delivery}.", False),
+    ("commerce_order_not_received", "Order not received", "Hi {first_name}, I checked the tracking for {order_number} — it shows delivered on {delivery_date}. Please check with neighbours or your building's reception. If still missing, file a claim and we'll initiate an investigation with the carrier.", True),
+    ("damaged_packaging", "Damaged packaging report", "Hi {first_name}, I'm sorry to hear about the damage. Please send photos within 48 hours of delivery to support@democorp.example. Once we receive them, we'll arrange a free replacement or full refund.", False),
+    ("return_request", "Return request", "Hi {first_name}, return for order {order_number} approved. Use the prepaid label at the link above. Once we receive the item, your refund of ${refund_amount} will process within 3 business days.", False),
+    ("saas_invoice_question", "Invoice question", "Hi {first_name}, invoice {invoice_number} for ${amount} was issued on {issued_at} and is due {due_at}. Line items breakdown: {line_summary}. Let me know which line you'd like to discuss.", False),
+    ("saas_overage_explained", "Overage charges explained", "Hi {first_name}, the overage on org {org_id} for {month} is ${overage_amount}. This was calculated as {overage_calls} calls × ${rate}/1000 calls. The plan's grace period of 5% was already applied.", False),
+    ("saas_subscription_cancel", "Subscription cancellation", "Hi {first_name}, I can cancel subscription on org {org_id}. Cancellation takes effect at the end of the current billing period ({end_date}). No refunds for the unused portion per the cancellation policy.", True),
+    ("saas_seat_addition", "Adding seats", "Hi {first_name}, I can add {n} seats to org {org_id}'s plan. Pro-rated charge of ${prorated} will appear on your next invoice. Want me to proceed?", False),
+    ("escalation_to_supervisor", "Escalation to supervisor", "Hi {first_name}, I'm escalating this to my supervisor for review. You'll receive a follow-up within {hours} hours. Thanks for your patience.", True),
+    ("fraud_review_hold", "Fraud review hold", "Hi {first_name}, your account is under brief security review. We may ask for additional verification. We aim to clear reviews within 1 business day; thanks for understanding.", True),
+    ("policy_link_only", "Policy reference reply", "Hi {first_name}, our {policy_type} policy is published at help.democorp.example/{policy_type}. The clauses most relevant to your question are {clause_keys}.", False),
+    ("information_only_no_action", "Information-only response", "Hi {first_name}, this is informational and does not require action on your end. Let me know if you have follow-up questions.", False),
+]
+
+
+def _seed_knowledge(
+    *,
+    session: Session,
+    counts: dict[str, int],
+    customer_ids: list[int],
+    rng: random.Random,
+    fake: Faker,
+    summary: dict[str, int],
+) -> None:
+    """Seed the textual knowledge tables (Phase 6B-2)."""
+
+    # ---- policy_documents ----
+    # Cycle through the curated 50-entry catalog and produce versioned copies
+    # for the desired total. The catalog already has 50 distinct (domain,
+    # policy_type) combos, so the small preset (50) is a 1:1 mapping.
+    policy_target = counts["policy_documents"]
+    policy_rows: list[dict[str, Any]] = []
+    policy_clauses_planned: list[
+        tuple[int, str, str, str, str, Optional[str], Optional[str]]
+    ] = []  # (policy_id, clause_key, title, body, severity, applies_to, exceptions)
+
+    today = datetime.now(timezone.utc).date()
+    catalog_len = len(_POLICY_CATALOG)
+    for i in range(policy_target):
+        entry = _POLICY_CATALOG[i % catalog_len]
+        version = 1 + (i // catalog_len)
+        effective_from = today - timedelta(days=rng.randint(30, 720))
+        is_active = (i // catalog_len == policy_target // catalog_len) or rng.random() < 0.85
+        # 15% chance the document is superseded
+        if not is_active:
+            effective_to = effective_from + timedelta(days=rng.randint(60, 540))
+        else:
+            effective_to = None
+
+        title_suffix = f" v{version}" if version > 1 else ""
+        body_suffix = (
+            ""
+            if i < catalog_len
+            else (
+                "\n\n"
+                + fake.paragraph(nb_sentences=rng.randint(3, 6))
+                + "\n\nRevision history: minor wording updates and clarifications."
+            )
+        )
+        policy_id = len(policy_rows) + 1
+        policy_rows.append(
+            {
+                "id": policy_id,
+                "domain": entry["domain"],
+                "policy_type": entry["policy_type"],
+                "title": f"{entry['title']}{title_suffix}",
+                "version": version,
+                "effective_from": effective_from,
+                "effective_to": effective_to,
+                "is_active": is_active,
+                "body": entry["body"] + body_suffix,
+            }
+        )
+        # Stage clauses for this policy
+        for clause in entry["clauses"]:
+            policy_clauses_planned.append(
+                (policy_id, *clause)
+            )
+
+    _bulk_insert(session, PolicyDocument, policy_rows)
+    summary["policy_documents"] = len(policy_rows)
+
+    # ---- policy_clauses ----
+    clause_target = counts["policy_clauses"]
+    clause_rows: list[dict[str, Any]] = []
+    # Use the planned clauses first (these are domain-correct); if we need more,
+    # cycle through them with minor wording variation.
+    planned = list(policy_clauses_planned)
+    rng.shuffle(planned)
+    while len(clause_rows) < clause_target:
+        for entry in planned:
+            if len(clause_rows) >= clause_target:
+                break
+            policy_id, clause_key, title, body, severity, applies_to, exceptions = entry
+            # Add a faint paraphrasing tail beyond first cycle so the text isn't
+            # byte-identical (helps full-text search realism).
+            cycle = len(clause_rows) // len(planned)
+            body_out = body
+            if cycle >= 1:
+                body_out = (
+                    body
+                    + " "
+                    + fake.sentence(nb_words=rng.randint(8, 18))
+                )
+            clause_rows.append(
+                {
+                    "id": len(clause_rows) + 1,
+                    "policy_document_id": policy_id,
+                    "clause_key": clause_key if cycle == 0 else f"{clause_key}_v{cycle + 1}",
+                    "title": title,
+                    "body": body_out,
+                    "severity": severity,
+                    "applies_to": applies_to,
+                    "exceptions": exceptions,
+                }
+            )
+    _bulk_insert(session, PolicyClause, clause_rows)
+    summary["policy_clauses"] = len(clause_rows)
+
+    # ---- product_warranty_terms ----
+    warranty_target = counts["product_warranty_terms"]
+    product_count = counts["products"]
+    # Note: products are seeded with explicit ids 1..product_count
+    warranty_rows: list[dict[str, Any]] = []
+    for i in range(warranty_target):
+        product_id = (i % product_count) + 1
+        tpl = _WARRANTY_TEMPLATES[i % len(_WARRANTY_TEMPLATES)]
+        # Vary duration slightly across rows (medium/large) to add realism
+        duration = tpl["duration_months"]
+        if i >= len(_WARRANTY_TEMPLATES):
+            # Small jitter beyond first cycle
+            duration = max(0, duration + rng.choice([-3, 0, 0, 0, 3, 6]))
+        # Add a one-sentence tail for variety beyond the first product
+        extra = (
+            ""
+            if i < product_count
+            else " " + fake.sentence(nb_words=rng.randint(10, 18))
+        )
+        warranty_rows.append(
+            {
+                "id": i + 1,
+                "product_id": product_id,
+                "warranty_type": tpl["warranty_type"],
+                "duration_months": duration,
+                "body": tpl["body_template"] + extra,
+                "exclusions": tpl["exclusions"],
+            }
+        )
+    _bulk_insert(session, ProductWarrantyTerms, warranty_rows)
+    summary["product_warranty_terms"] = len(warranty_rows)
+
+    # ---- product_return_rules ----
+    rule_target = counts["product_return_rules"]
+    category_count = counts["product_categories"]
+    rule_rows: list[dict[str, Any]] = []
+    for i in range(rule_target):
+        category_id = (i % category_count) + 1
+        tpl = _RETURN_RULE_TEMPLATES[i % len(_RETURN_RULE_TEMPLATES)]
+        extra = (
+            ""
+            if i < len(_RETURN_RULE_TEMPLATES)
+            else " " + fake.sentence(nb_words=rng.randint(10, 18))
+        )
+        rule_rows.append(
+            {
+                "id": i + 1,
+                "product_category_id": category_id,
+                "rule_name": tpl["rule_name"],
+                "body": tpl["body"] + extra,
+                "opened_item_allowed": tpl["opened_item_allowed"],
+                "return_window_days": tpl["return_window_days"],
+                "restocking_fee_percent": tpl["restocking_fee_percent"],
+                "exceptions": tpl["exceptions"],
+            }
+        )
+    _bulk_insert(session, ProductReturnRule, rule_rows)
+    summary["product_return_rules"] = len(rule_rows)
+
+    # ---- internal_agent_notes ----
+    # Distribute notes across customers; a customer may have multiple notes.
+    note_target = counts["internal_agent_notes"]
+    # Realistic related-entity pools (using actual seeded id ranges).
+    related_pools = [
+        ("booking", counts["bookings"]),
+        ("order", counts["commerce_orders"]),
+        ("ticket", counts["support_tickets"]),
+        ("invoice", counts["invoices"]),
+        ("subscription", counts["subscriptions"]),
+        (None, 0),  # standalone note
+    ]
+    note_rows: list[dict[str, Any]] = []
+    for i in range(note_target):
+        cust_id = customer_ids[rng.randrange(len(customer_ids))]
+        note_type, tpl_body = _NOTE_TEMPLATES[i % len(_NOTE_TEMPLATES)]
+        related_type, max_id = rng.choice(related_pools)
+        related_id: Optional[int] = (
+            rng.randint(1, max_id) if related_type is not None and max_id > 0 else None
+        )
+        body = tpl_body.format(
+            related_type=related_type or "n/a",
+            related_id=related_id if related_id is not None else "n/a",
+        )
+        # Add a contextual tail beyond the first pass for variety.
+        if i >= len(_NOTE_TEMPLATES):
+            body = body + " " + fake.sentence(nb_words=rng.randint(12, 24))
+        note_rows.append(
+            {
+                "id": i + 1,
+                "customer_id": cust_id,
+                "related_type": related_type,
+                "related_id": related_id,
+                "note_type": note_type,
+                "body": body,
+            }
+        )
+    _bulk_insert(session, InternalAgentNote, note_rows)
+    summary["internal_agent_notes"] = len(note_rows)
+
+    # ---- operational_incidents ----
+    incident_target = counts["operational_incidents"]
+    incident_rows: list[dict[str, Any]] = []
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    for i in range(incident_target):
+        domain, kind, title, body = _INCIDENT_TEMPLATES[i % len(_INCIDENT_TEMPLATES)]
+        started = now - timedelta(days=rng.randint(0, 365), hours=rng.randint(0, 23))
+        resolved: Optional[datetime] = None
+        if rng.random() < 0.92:
+            resolved = started + timedelta(
+                minutes=rng.randint(15, 60 * 18)
+            )
+        affected = {
+            "affected_count": rng.randint(50, 50_000),
+            "internal_severity": rng.choice(["sev1", "sev2", "sev3"]),
+            "comms_sent": rng.random() < 0.7,
+        }
+        # Body variety beyond first cycle
+        body_out = body
+        if i >= len(_INCIDENT_TEMPLATES):
+            body_out = (
+                body
+                + " "
+                + fake.sentence(nb_words=rng.randint(12, 22))
+            )
+        incident_rows.append(
+            {
+                "id": i + 1,
+                "domain": domain,
+                "incident_type": kind,
+                "title": title,
+                "body": body_out,
+                "started_at": started,
+                "resolved_at": resolved,
+                "affected_entities_json": affected,
+            }
+        )
+    _bulk_insert(session, OperationalIncident, incident_rows)
+    summary["operational_incidents"] = len(incident_rows)
+
+    # ---- support_resolution_templates ----
+    template_target = counts["support_resolution_templates"]
+    template_rows: list[dict[str, Any]] = []
+    for i in range(template_target):
+        category, title, body, esc = _SUPPORT_RESOLUTION_TEMPLATES[
+            i % len(_SUPPORT_RESOLUTION_TEMPLATES)
+        ]
+        # Distinct titles when cycling
+        title_suffix = "" if i < len(_SUPPORT_RESOLUTION_TEMPLATES) else f" — variant {i // len(_SUPPORT_RESOLUTION_TEMPLATES) + 1}"
+        template_rows.append(
+            {
+                "id": i + 1,
+                "category": category,
+                "title": title + title_suffix,
+                "body": body,
+                "escalation_required": esc,
+            }
+        )
+    _bulk_insert(session, SupportResolutionTemplate, template_rows)
+    summary["support_resolution_templates"] = len(template_rows)

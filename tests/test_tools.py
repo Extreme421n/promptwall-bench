@@ -82,6 +82,14 @@ _ALL_REGISTERED_TOOLS = sorted(
         "get_commerce_return_status",
         # Phase C2 — CRM extras
         "get_customer_segment",
+        # Phase 6B-4 — textual retrieval
+        "search_return_rules",
+        "get_product_warranty_terms",
+        "search_internal_agent_notes",
+        "search_operational_incidents",
+        "get_support_resolution_template",
+        "list_policy_versions",
+        "get_active_policy",
     ]
 )
 
@@ -89,12 +97,12 @@ _ALL_REGISTERED_TOOLS = sorted(
 def test_registry_has_all_registered_tools() -> None:
     names = default_registry.names()
     assert names == _ALL_REGISTERED_TOOLS
-    assert len(default_registry) == len(_ALL_REGISTERED_TOOLS) == 35
+    assert len(default_registry) == len(_ALL_REGISTERED_TOOLS) == 42
 
 
 def test_registry_describe_all_yields_function_calling_spec() -> None:
     descs = default_registry.describe_all()
-    assert len(descs) == 35
+    assert len(descs) == 42
     for d in descs:
         assert {"name", "description", "domain", "risk_level", "read_only",
                 "input_schema", "output_schema"} <= set(d)

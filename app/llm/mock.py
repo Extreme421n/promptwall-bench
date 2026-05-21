@@ -174,6 +174,98 @@ class MockLLMProvider(LLMProvider):
             r"customer\s*(?:id|#)?\s*(\d{1,7})", lower
         )
 
+        sku_match = re.search(r"\b(SKU-[A-Z0-9]+)\b", text)
+
+        # ------------------------------------------------------------------
+        # Phase 6B-5 — specialized text-retrieval tools. These branches are
+        # NARROW on purpose: each one fires only on phrasing that the new
+        # text-retrieval tools serve better than the existing KB tool. When
+        # phrasing is generic we fall through to the older branches.
+        # ------------------------------------------------------------------
+
+        # Return rules: "return rule(s)", "return window", "restocking fee",
+        # "can I return an opened ...". These map directly to the
+        # product_return_rules table.
+        return_rule_phrases = (
+            "return rule",
+            "return window",
+            "restocking fee",
+            "opened item",
+            "can i return",
+            "return an opened",
+            "return policy for",
+        )
+        if (
+            any(p in lower for p in return_rule_phrases)
+            and "search_return_rules" in available
+        ):
+            args: dict[str, Any] = {"query": _kb_query(text) or "return"}
+            cat_match = re.search(
+                r"\b(electronics|apparel|home|kitchen|sports|grocery|beauty|books|toys)\b",
+                lower,
+            )
+            if cat_match:
+                args["product_category"] = cat_match.group(1).title()
+            return _tool("search_return_rules", args)
+
+        # Warranty + SKU → product warranty terms. Without a SKU we fall
+        # through so the policy/KB branches can pick up the generic case.
+        if "warranty" in lower and sku_match and "get_product_warranty_terms" in available:
+            return _tool(
+                "get_product_warranty_terms", {"sku": sku_match.group(1)}
+            )
+
+        # Internal agent notes. These are operator-facing notes attached to a
+        # customer — useless without a customer id, so we clarify when none
+        # is given.
+        internal_note_phrases = (
+            "internal note",
+            "agent note",
+            "agent log",
+            "notes on customer",
+            "notes on this customer",
+            "previous notes",
+        )
+        if (
+            any(p in lower for p in internal_note_phrases)
+            and "search_internal_agent_notes" in available
+        ):
+            if cust_id_match:
+                return _tool(
+                    "search_internal_agent_notes",
+                    {"customer_id": int(cust_id_match.group(1))},
+                )
+            return _clarify(
+                "Sure — which customer's internal notes should I pull? Please "
+                "share the customer id."
+            )
+
+        # Operational incidents (outages, ongoing service disruptions).
+        incident_phrases = (
+            "operational incident",
+            "ongoing incident",
+            "service incident",
+            "service disruption",
+            "outage",
+            "incident affecting",
+            "any incidents",
+            "active incident",
+        )
+        if (
+            any(p in lower for p in incident_phrases)
+            and "search_operational_incidents" in available
+        ):
+            args = {}
+            for d in ("airline", "saas", "commerce", "support"):
+                if d in lower:
+                    args["domain"] = d
+                    break
+            if "active" in lower or "ongoing" in lower or "current" in lower:
+                args["active_only"] = True
+            if "domain" not in args:
+                args["query"] = _kb_query(text) or "incident"
+            return _tool("search_operational_incidents", args)
+
         # ------------------------------------------------------------------
         # Phase 2E specialized tools — checked first when their phrasing fits.
         # These ARE narrow on purpose: each branch only fires on phrasing the
@@ -631,11 +723,85 @@ def _summarize_payload(tool_name: str, payload: dict[str, Any]) -> str:
         if not clauses:
             return "No policy clause matches that topic."
         c = clauses[0]
-        return f"{c.get('title')} ({c.get('category')}): {c.get('excerpt')}"
+        # Phase 6B-4 schema: clauses carry policy_domain, policy_type, body.
+        body = c.get("body") or c.get("excerpt") or ""
+        domain_or_cat = c.get("policy_domain") or c.get("policy_type") or c.get("category") or ""
+        return f"{c.get('title')} ({domain_or_cat}): {body[:200]}"
     if tool_name == "get_customer_open_issues":
         n_t = payload.get("open_ticket_count", 0)
         n_r = payload.get("pending_refund_count", 0)
         return f"{n_t} open ticket(s) and {n_r} pending refund(s) on the account."
+    if tool_name == "search_return_rules":
+        rules = payload.get("rules") or []
+        if not rules:
+            return "No matching return rules found."
+        r = rules[0]
+        return (
+            f"{r.get('rule_name')} ({r.get('product_category_name')}): "
+            f"{r.get('return_window_days')}-day window, "
+            f"opened-item allowed: {r.get('opened_item_allowed')}, "
+            f"restocking fee: {r.get('restocking_fee_percent')}%."
+        )
+    if tool_name == "get_product_warranty_terms":
+        terms = payload.get("terms") or []
+        if not terms:
+            return "No warranty terms on file for that product."
+        t = terms[0]
+        return (
+            f"Warranty on {t.get('product_sku')}: {t.get('warranty_type')}, "
+            f"{t.get('duration_months')} months."
+        )
+    if tool_name == "search_internal_agent_notes":
+        notes = payload.get("notes") or []
+        if not notes:
+            return "No internal agent notes on this customer."
+        n = notes[0]
+        return (
+            f"Latest note ({n.get('note_type')}): {n.get('body_excerpt')}"
+        )
+    if tool_name == "search_operational_incidents":
+        incidents = payload.get("incidents") or []
+        if not incidents:
+            return "No matching operational incidents."
+        i = incidents[0]
+        status = "resolved" if i.get("resolved_at") else "active"
+        return (
+            f"Incident in {i.get('domain')} ({status}): "
+            f"{i.get('title') or i.get('summary', '')[:120]}"
+        )
+    if tool_name == "get_support_resolution_template":
+        templates = payload.get("templates") or []
+        if not templates:
+            return "No resolution template matches that category."
+        t = templates[0]
+        return (
+            f"Template ({t.get('category')}): "
+            f"{t.get('title') or t.get('body', '')[:120]} "
+            f"— escalation_required={t.get('escalation_required')}."
+        )
+    if tool_name == "search_policy_documents":
+        docs = payload.get("documents") or []
+        if not docs:
+            return "No matching policy documents."
+        d = docs[0]
+        return (
+            f"{d.get('title')} ({d.get('domain')}/{d.get('policy_type')}, "
+            f"v{d.get('version')}): {(d.get('excerpt') or '')[:200]}"
+        )
+    if tool_name == "list_policy_versions":
+        versions = payload.get("versions") or []
+        if not versions:
+            return "No versions found for that policy."
+        latest = versions[0]
+        return (
+            f"{payload.get('count')} version(s) on file; latest is v"
+            f"{latest.get('version')} effective {latest.get('effective_from')}."
+        )
+    if tool_name == "get_active_policy":
+        return (
+            f"Active {payload.get('domain')}/{payload.get('policy_type')} policy "
+            f"v{payload.get('version')}: {(payload.get('body') or '')[:200]}"
+        )
     if tool_name == "search_customer_records":
         matches = payload.get("matches") or []
         n = payload.get("count", 0)

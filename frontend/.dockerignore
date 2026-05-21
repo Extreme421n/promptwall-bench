@@ -1,0 +1,10 @@
+node_modules
+dist
+dist-ssr
+.env
+.env.local
+.env.*.local
+.vite
+.git
+.DS_Store
+README.md

@@ -37,8 +37,9 @@ def test_models_import_cleanly() -> None:
     # 15 core (Phase 1B) + 2 evaluation (Phase 2B)
     # + 1 promptwall_candidate_decisions (Phase 3A)
     # + 10 SaaS/billing (Phase B1)
-    # + 11 commerce/orders (Phase B2) = 39.
-    assert len(models.Base.metadata.tables) == 39
+    # + 11 commerce/orders (Phase B2)
+    # + 7 textual knowledge (Phase 6B-1) = 46.
+    assert len(models.Base.metadata.tables) == 46
 
 
 def test_full_object_graph_insert_and_query(db: Session) -> None:

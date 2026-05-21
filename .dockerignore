@@ -1,0 +1,40 @@
+# Keep the backend image small: only ship runtime code, never seeds /
+# test artefacts / virtualenvs / IDE config.
+
+# Python tooling + caches
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Local DBs + reports
+*.db
+*.sqlite
+*.sqlite3
+test.db
+reports/
+reports_large/
+
+# Frontend (built and shipped in its own image)
+frontend/
+
+# Git / OS / editor cruft
+.git/
+.gitignore
+.gitattributes
+.DS_Store
+.idea/
+.vscode/
+.claude/
+
+# Misc
+docker-compose.yml
+*.md
+.env
+.env.*

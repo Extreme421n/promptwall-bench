@@ -19,7 +19,7 @@ def test_list_tools(api_client) -> None:
     assert r.status_code == 200
     payload = r.json()
     assert payload["count"] >= 30
-    assert payload["count"] == 35
+    assert payload["count"] == 42
     names = sorted(t["name"] for t in payload["tools"])
     assert names == sorted(
         [
@@ -66,6 +66,14 @@ def test_list_tools(api_client) -> None:
             "get_commerce_return_status",
             # Phase C2 — CRM extras
             "get_customer_segment",
+            # Phase 6B-4 — textual retrieval
+            "search_return_rules",
+            "get_product_warranty_terms",
+            "search_internal_agent_notes",
+            "search_operational_incidents",
+            "get_support_resolution_template",
+            "list_policy_versions",
+            "get_active_policy",
         ]
     )
     # Each summary has the metadata the chatbot/PromptWall layer will need.

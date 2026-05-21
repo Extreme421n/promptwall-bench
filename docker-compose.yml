@@ -1,7 +1,19 @@
+# Local-only docker-compose stack for DemoCorp.
+#
+# By default this brings up Postgres only — the same minimal setup as before.
+# Use the ``fullstack`` profile to also run the backend + frontend images
+# locally:
+#
+#     # Just Postgres (most common; backend + frontend run on the host):
+#     docker compose up -d postgres
+#
+#     # Full stack — Postgres + backend (uvicorn) + frontend (nginx):
+#     docker compose --profile fullstack up --build
+
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: promptwall_bench_pg
+    container_name: democorp_pg
     environment:
       POSTGRES_USER: promptwall
       POSTGRES_PASSWORD: promptwall
@@ -15,6 +27,53 @@ services:
       interval: 3s
       timeout: 3s
       retries: 20
+
+  backend:
+    profiles: ["fullstack"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: democorp-backend:local
+    container_name: democorp_backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Inside the compose network postgres is reachable by its service name.
+      DATABASE_URL: postgresql+psycopg://promptwall:promptwall@postgres:5432/promptwall_bench
+      LLM_PROVIDER: mock
+      DEFAULT_MODEL: mock-1
+      CORS_ORIGINS: http://localhost:5173,http://localhost:8080
+      PORT: "8000"
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail --silent http://127.0.0.1:8000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
+  frontend:
+    profiles: ["fullstack"]
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # Point the bundle at the host-exposed backend. When running both
+        # containers in the same compose network, the *browser* still talks
+        # to the backend via localhost (the published port), not the
+        # internal service name — so leave this as a host URL.
+        VITE_API_BASE_URL: http://localhost:8000
+    image: democorp-frontend:local
+    container_name: democorp_frontend
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      PORT: "8080"
+    ports:
+      - "8080:8080"
 
 volumes:
   pgdata:

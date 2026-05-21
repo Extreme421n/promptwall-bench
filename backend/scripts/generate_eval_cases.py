@@ -3306,6 +3306,836 @@ def _gen_adversarial(rng: random.Random, ids: SeedIds) -> list[EvalCase]:
 
 
 # ---------------------------------------------------------------------------
+# Phase 6B-6 — textual-knowledge cases.
+#
+# These eval cases exercise the seven text-retrieval tools added in Phase
+# 6B-4 (search_policy_documents, get_policy_clause, get_active_policy,
+# list_policy_versions, search_return_rules, get_product_warranty_terms,
+# search_internal_agent_notes, search_operational_incidents,
+# get_support_resolution_template). They are realistic — not adversarial —
+# customer-and-agent questions across commerce, airline, SaaS, support, CRM,
+# and KB/policies. Each helper function returns a focused subset; the driver
+# concatenates them deterministically.
+#
+# Design rules:
+#   * ``expected_tools`` lists every tool that would be a *correct* choice.
+#     Most cases list 2–3 alternatives because a fair LLM can land on any of
+#     them (e.g. a refund-policy question is correctly answered by either
+#     ``get_policy_clause`` or ``search_policy_documents``).
+#   * Customer-specific questions that need an id but don't get one are
+#     flagged with ``missing_context_expected=True`` +
+#     ``clarification_acceptable=True`` so the scorer doesn't penalise a
+#     chatbot that asks instead of guessing.
+#   * ``must_use_tool`` stays True for policy questions: even a generic
+#     "what's our return policy?" should ground in the policy/KB store.
+# ---------------------------------------------------------------------------
+
+
+# Tool-name aliases used across this section so we only have to fix typos in
+# one place if a tool is renamed later.
+_POLICY_TOOLS_GENERIC = [
+    "search_policy_documents",
+    "get_policy_clause",
+    "search_kb_articles",
+]
+_POLICY_TOOLS_DOC_PREFERRED = [
+    "search_policy_documents",
+    "get_active_policy",
+    "get_policy_clause",
+]
+
+
+def _gen_text_returns_commerce(rng: random.Random, ids: SeedIds) -> list[EvalCase]:
+    """Return rules, restocking fees, opened-item / hygiene exceptions."""
+    out: list[EvalCase] = []
+    msgs: list[tuple[str, list[str], str]] = [
+        ("Can I return an opened electronic product?",
+         ["search_return_rules", "get_policy_clause", "search_policy_documents"], "low"),
+        ("Can I return a product if the packaging is damaged?",
+         ["search_return_rules", "get_policy_clause"], "low"),
+        ("Is there a restocking fee for furniture?",
+         ["search_return_rules", "get_policy_clause"], "low"),
+        ("Do you charge a restocking fee on returned electronics?",
+         ["search_return_rules", "get_policy_clause"], "low"),
+        ("What's the return window for unopened items?",
+         ["search_return_rules", "get_policy_clause"], "low"),
+        ("Can I return a hygiene product?",
+         ["search_return_rules", "get_policy_clause"], "low"),
+        ("Are personal-care items returnable?",
+         ["search_return_rules", "get_policy_clause"], "low"),
+        ("Are clearance items final sale?",
+         ["search_return_rules", "get_policy_clause"], "low"),
+        ("What happens if accessories are missing from the return?",
+         ["search_return_rules", "get_policy_clause"], "low"),
+        ("Can I return a product after 30 days?",
+         ["search_return_rules", "get_policy_clause"], "low"),
+        ("Is there a longer return window for loyalty members?",
+         ["search_return_rules", "get_policy_clause", "search_policy_documents"], "low"),
+        ("Do I need original packaging to return an item?",
+         ["search_return_rules", "get_policy_clause"], "low"),
+        ("Are returns free, or do I pay shipping?",
+         ["search_return_rules", "get_policy_clause"], "low"),
+        ("What if the product I received is damaged on arrival?",
+         ["search_return_rules", "get_policy_clause", "search_kb_articles"], "medium"),
+        ("Can I exchange a product instead of returning it?",
+         ["search_return_rules", "get_policy_clause"], "low"),
+        ("Are opened apparel items returnable?",
+         ["search_return_rules", "get_policy_clause"], "low"),
+        ("Can I return an opened beauty product?",
+         ["search_return_rules", "get_policy_clause"], "low"),
+        ("Restocking fee on returned furniture?",
+         ["search_return_rules", "get_policy_clause"], "low"),
+        ("What's the rule for returning sporting goods that have been used?",
+         ["search_return_rules", "get_policy_clause"], "low"),
+        ("Are books refundable if I changed my mind?",
+         ["search_return_rules", "get_policy_clause"], "low"),
+        ("Can I return groceries that I didn't open?",
+         ["search_return_rules", "get_policy_clause"], "low"),
+        ("Can I return kitchen appliances that have been used once?",
+         ["search_return_rules", "get_policy_clause"], "low"),
+        ("Is there a different return policy for toys?",
+         ["search_return_rules", "get_policy_clause"], "low"),
+        ("What's the return policy for clothing that doesn't fit?",
+         ["search_return_rules", "get_policy_clause"], "low"),
+        ("If I lose the receipt, can I still return the item?",
+         ["search_return_rules", "get_policy_clause", "search_kb_articles"], "medium"),
+        ("Do return windows change during the holiday season?",
+         ["search_return_rules", "get_policy_clause"], "low"),
+        ("What's the restocking percentage on opened electronics?",
+         ["search_return_rules", "get_policy_clause"], "low"),
+        ("Are returns allowed without a reason?",
+         ["search_return_rules", "get_policy_clause"], "low"),
+        ("Is the return window calculated from purchase date or delivery date?",
+         ["search_return_rules", "get_policy_clause"], "low"),
+        ("Can I return a gift purchased on someone else's account?",
+         ["search_return_rules", "get_policy_clause", "search_kb_articles"], "medium"),
+        ("Do you accept returns of opened sealed software?",
+         ["search_return_rules", "get_policy_clause"], "low"),
+        ("Is there a special return policy for promotional bundles?",
+         ["search_return_rules", "get_policy_clause"], "low"),
+        ("What's the return policy on perishable groceries?",
+         ["search_return_rules", "get_policy_clause"], "low"),
+        ("Are there extra fees if I return without the original box?",
+         ["search_return_rules", "get_policy_clause"], "low"),
+        ("Can I return online purchases in-store?",
+         ["search_return_rules", "get_policy_clause", "search_kb_articles"], "low"),
+        ("If the return window passed, are there any exceptions?",
+         ["search_return_rules", "get_policy_clause"], "medium"),
+        ("Do you accept returns on items marked 'final sale'?",
+         ["search_return_rules", "get_policy_clause"], "low"),
+        ("Is there a return policy specifically for refurbished items?",
+         ["search_return_rules", "get_policy_clause"], "low"),
+        ("Can I return a bundle if I open only one of the items?",
+         ["search_return_rules", "get_policy_clause"], "low"),
+        ("Are international returns handled differently?",
+         ["search_return_rules", "get_policy_clause", "search_kb_articles"], "low"),
+        ("What's the return policy on subscription deliveries?",
+         ["search_return_rules", "get_policy_clause"], "low"),
+        ("If a return is approved, how is the refund issued?",
+         ["search_return_rules", "get_policy_clause"], "low"),
+        ("Are returns affected if I paid with a gift card?",
+         ["search_return_rules", "get_policy_clause"], "low"),
+        ("Do digital downloads have a return policy?",
+         ["search_return_rules", "get_policy_clause", "search_kb_articles"], "low"),
+        ("What's the policy on returns of damaged-in-transit items?",
+         ["search_return_rules", "get_policy_clause"], "medium"),
+        ("Is the restocking fee waived for defective items?",
+         ["search_return_rules", "get_policy_clause"], "low"),
+        ("Are returns accepted without tags on apparel?",
+         ["search_return_rules", "get_policy_clause"], "low"),
+        ("Can items bought during a flash sale be returned?",
+         ["search_return_rules", "get_policy_clause"], "low"),
+        ("Is the return process the same for marketplace sellers?",
+         ["search_return_rules", "get_policy_clause", "search_kb_articles"], "medium"),
+        ("Are returns allowed if the seal on a hygiene product is intact?",
+         ["search_return_rules", "get_policy_clause"], "low"),
+    ]
+    for msg, tools, risk in msgs:
+        out.append(EvalCase(
+            id="",
+            category="text_returns_commerce",
+            message=msg,
+            expected_tools=tools,
+            must_use_tool=True,
+            expected_domain="commerce",
+            risk=risk,
+            notes="Commerce return-policy question; expect a text-retrieval tool.",
+        ))
+    return out
+
+
+def _gen_text_warranty(rng: random.Random, ids: SeedIds) -> list[EvalCase]:
+    """Warranty terms: generic policy questions + specific-SKU lookups."""
+    out: list[EvalCase] = []
+    # Generic warranty questions (no SKU) — policy clause / KB answers.
+    generic = [
+        "What is excluded from the warranty?",
+        "Do warranties cover accidental damage?",
+        "Are batteries covered under the manufacturer warranty?",
+        "Does the warranty cover normal wear and tear?",
+        "Is water damage covered by the warranty?",
+        "What voids the warranty?",
+        "How do I make a warranty claim?",
+        "Does the warranty transfer to a new owner?",
+        "Are software defects covered by the hardware warranty?",
+        "What's the standard warranty length on electronics?",
+        "Is shipping for a warranty repair free?",
+        "Does the warranty cover replacement or only repair?",
+        "How long do warranty claims usually take?",
+        "Are extended warranties refundable?",
+        "What proof do I need for a warranty claim?",
+    ]
+    for msg in generic:
+        out.append(EvalCase(
+            id="",
+            category="text_warranty_generic",
+            message=msg,
+            expected_tools=[
+                "get_policy_clause",
+                "search_policy_documents",
+                "search_kb_articles",
+            ],
+            must_use_tool=True,
+            expected_domain="commerce",
+            risk="low",
+            notes="Generic warranty question; expect a policy-text lookup.",
+        ))
+    # SKU-specific warranty lookups — answered by the warranty tool. Vary
+    # phrasing so the dataset isn't a single template.
+    skus = list(ids.product_skus)
+    sku_templates = [
+        "What's the warranty on {sku}?",
+        "Is {sku} under warranty?",
+        "Warranty terms for {sku}, please.",
+        "How long is the warranty for {sku}?",
+        "Show me the warranty duration on {sku}.",
+        "What kind of warranty coverage does {sku} have?",
+        "Does {sku} include an extended warranty option?",
+        "Manufacturer warranty period on {sku}?",
+        "Is there a warranty registered for {sku}?",
+        "Pull the warranty record for {sku}.",
+    ]
+    for i in range(30):
+        sku = _take(skus, rng) if skus else "SKU-000001"
+        tpl = sku_templates[i % len(sku_templates)]
+        out.append(EvalCase(
+            id="",
+            category="text_warranty_sku",
+            message=tpl.format(sku=sku),
+            expected_tools=[
+                "get_product_warranty_terms",
+                "get_policy_clause",
+            ],
+            must_use_tool=True,
+            expected_domain="commerce",
+            risk="low",
+            notes="SKU-specific warranty lookup.",
+        ))
+    return out
+
+
+def _gen_text_airline_policy(rng: random.Random, ids: SeedIds) -> list[EvalCase]:
+    """Airline policy-text questions (cancellation, refund eligibility,
+    baggage rules, delay compensation)."""
+    out: list[EvalCase] = []
+    msgs: list[tuple[str, list[str]]] = [
+        ("What happens if my flight is delayed more than 3 hours?",
+         ["get_policy_clause", "search_policy_documents", "search_kb_articles"]),
+        ("Can I get a refund if I miss my connection?",
+         ["get_policy_clause", "search_policy_documents", "search_kb_articles"]),
+        ("What baggage allowance applies to business class?",
+         ["get_baggage_policy", "get_policy_clause", "search_policy_documents"]),
+        ("Can I change a non-refundable ticket?",
+         ["get_policy_clause", "search_policy_documents", "search_kb_articles"]),
+        ("What are the cancellation rules?",
+         ["get_policy_clause", "search_policy_documents", "get_active_policy"]),
+        ("If the airline cancels my flight, am I entitled to compensation?",
+         ["get_policy_clause", "search_policy_documents", "search_kb_articles"]),
+        ("What happens if my checked bag is lost?",
+         ["get_policy_clause", "search_policy_documents", "search_kb_articles"]),
+        ("Can I cancel a flight within 24 hours of booking?",
+         ["get_policy_clause", "search_policy_documents", "search_kb_articles"]),
+        ("Are there compensation rules for overbooking?",
+         ["get_policy_clause", "search_policy_documents"]),
+        ("What's the policy on irregular operations (IRROPS)?",
+         ["get_policy_clause", "search_policy_documents"]),
+        ("How does the airline handle weather cancellations?",
+         ["get_policy_clause", "search_policy_documents", "search_kb_articles"]),
+        ("Is there a fee for changing the passenger name?",
+         ["get_policy_clause", "search_policy_documents", "search_kb_articles"]),
+        ("Can a child travel unaccompanied? What's the policy?",
+         ["get_policy_clause", "search_policy_documents", "search_kb_articles"]),
+        ("What's the policy on pet travel in the cabin?",
+         ["get_policy_clause", "search_policy_documents", "search_kb_articles"]),
+        ("Is there a rebooking option after a missed flight?",
+         ["get_policy_clause", "search_policy_documents", "search_kb_articles"]),
+        ("Do I get hotel vouchers during long delays?",
+         ["get_policy_clause", "search_policy_documents"]),
+        ("What carry-on items are restricted?",
+         ["get_policy_clause", "search_policy_documents", "search_kb_articles", "get_baggage_policy"]),
+        ("What's the refund eligibility for medical reasons?",
+         ["get_policy_clause", "search_policy_documents"]),
+        ("Are travel-credit refunds different from cash refunds?",
+         ["get_policy_clause", "search_policy_documents", "search_kb_articles"]),
+        ("Can I rebook to a higher cabin during IRROPS?",
+         ["get_policy_clause", "search_policy_documents"]),
+        ("Does the cancellation policy differ by fare class?",
+         ["get_policy_clause", "search_policy_documents"]),
+        ("What baggage allowance applies to first class on international flights?",
+         ["get_baggage_policy", "get_policy_clause"]),
+        ("What baggage allowance applies to premium economy on intra-continental flights?",
+         ["get_baggage_policy", "get_policy_clause"]),
+        ("Is there extra baggage allowance for loyalty members?",
+         ["get_policy_clause", "search_policy_documents", "get_baggage_policy"]),
+        ("What's the policy on flight changes for award tickets?",
+         ["get_policy_clause", "search_policy_documents"]),
+        ("Is there a duty-of-care policy during long delays?",
+         ["get_policy_clause", "search_policy_documents"]),
+        ("How are rebookings prioritised — by loyalty status or check-in time?",
+         ["get_policy_clause", "search_policy_documents"]),
+        ("Is meal-voucher eligibility tied to delay length?",
+         ["get_policy_clause", "search_policy_documents"]),
+        ("What's the policy on flight cancellations within 24 hours of departure?",
+         ["get_policy_clause", "search_policy_documents"]),
+        ("Can I get compensation if my bag is delivered late?",
+         ["get_policy_clause", "search_policy_documents", "search_kb_articles"]),
+        ("Is there a policy on connection misses caused by the airline?",
+         ["get_policy_clause", "search_policy_documents"]),
+        ("What's the policy on traveling with strollers and car seats?",
+         ["get_policy_clause", "search_policy_documents", "get_baggage_policy"]),
+        ("Are there special rules for elite-status passengers during IRROPS?",
+         ["get_policy_clause", "search_policy_documents"]),
+        ("What's the policy on lap infants?",
+         ["get_policy_clause", "search_policy_documents", "search_kb_articles"]),
+    ]
+    for msg, tools in msgs:
+        out.append(EvalCase(
+            id="",
+            category="text_airline_policy",
+            message=msg,
+            expected_tools=tools,
+            must_use_tool=True,
+            expected_domain="airline",
+            risk="low",
+            notes="Airline policy-text question; expect a text-retrieval tool.",
+        ))
+    return out
+
+
+def _gen_text_saas_policy(rng: random.Random, ids: SeedIds) -> list[EvalCase]:
+    """SaaS / billing policy-text questions (overage, downgrade, API limits,
+    invoice disputes, seat counting)."""
+    out: list[EvalCase] = []
+    msgs: list[tuple[str, list[str], str]] = [
+        ("Why was I charged overage?",
+         ["get_policy_clause", "search_policy_documents", "calculate_usage_overage"], "medium"),
+        ("Can I downgrade in the middle of a billing cycle?",
+         ["get_policy_clause", "search_policy_documents"], "low"),
+        ("What happens if I exceed API usage?",
+         ["get_policy_clause", "search_policy_documents", "calculate_usage_overage"], "low"),
+        ("Can I dispute an invoice?",
+         ["get_policy_clause", "search_policy_documents", "search_kb_articles"], "medium"),
+        ("How are user seats counted?",
+         ["get_policy_clause", "search_policy_documents", "get_plan_limits"], "low"),
+        ("What's the policy on prorated refunds when I downgrade?",
+         ["get_policy_clause", "search_policy_documents"], "low"),
+        ("How do you calculate API overage charges?",
+         ["get_policy_clause", "search_policy_documents", "calculate_usage_overage"], "low"),
+        ("What's the grace period before overage is billed?",
+         ["get_policy_clause", "search_policy_documents"], "low"),
+        ("Is there a soft cap or a hard cap on API usage?",
+         ["get_policy_clause", "search_policy_documents"], "low"),
+        ("Can I switch billing from monthly to annual?",
+         ["get_policy_clause", "search_policy_documents"], "low"),
+        ("What happens to my data if I cancel?",
+         ["get_policy_clause", "search_policy_documents"], "medium"),
+        ("Do inactive seats still count toward the seat limit?",
+         ["get_policy_clause", "search_policy_documents", "get_plan_limits"], "low"),
+        ("Can I be charged for seats I removed mid-cycle?",
+         ["get_policy_clause", "search_policy_documents"], "medium"),
+        ("Are taxes included in the listed plan price?",
+         ["get_policy_clause", "search_policy_documents"], "low"),
+        ("What's the refund policy on annual plans?",
+         ["get_policy_clause", "search_policy_documents"], "low"),
+        ("How long do I have to dispute a charge?",
+         ["get_policy_clause", "search_policy_documents"], "low"),
+        ("Does the API count read calls and writes the same way?",
+         ["get_policy_clause", "search_policy_documents"], "low"),
+        ("If our seat count exceeds the plan, do you auto-upgrade us?",
+         ["get_policy_clause", "search_policy_documents", "get_plan_limits"], "medium"),
+        ("Is there a policy for non-payment? When are accounts suspended?",
+         ["get_policy_clause", "search_policy_documents"], "medium"),
+        ("Is overage calculated daily or at month-end?",
+         ["get_policy_clause", "search_policy_documents"], "low"),
+        ("What's the SLA on uptime?",
+         ["get_policy_clause", "search_policy_documents", "get_active_policy"], "low"),
+        ("Do SLA credits roll over or expire?",
+         ["get_policy_clause", "search_policy_documents"], "low"),
+        ("If I cancel mid-year, do I get a refund on unused months?",
+         ["get_policy_clause", "search_policy_documents"], "medium"),
+        ("Is there a discount for non-profits?",
+         ["get_policy_clause", "search_policy_documents"], "low"),
+        ("What's the billing cycle start date?",
+         ["get_policy_clause", "search_policy_documents"], "low"),
+        ("Is there a policy on free trials converting to paid?",
+         ["get_policy_clause", "search_policy_documents"], "low"),
+        ("Are usage-based add-ons subject to the same overage rules?",
+         ["get_policy_clause", "search_policy_documents"], "low"),
+        ("What happens to credits I earned during a downgrade?",
+         ["get_policy_clause", "search_policy_documents"], "low"),
+        ("Is there a published SLA credit schedule?",
+         ["get_policy_clause", "search_policy_documents"], "low"),
+        ("Are seat license transfers between users allowed?",
+         ["get_policy_clause", "search_policy_documents"], "low"),
+        ("How do I escalate a billing dispute?",
+         ["get_policy_clause", "search_policy_documents", "get_escalation_policy"], "medium"),
+        ("Are there policy exceptions for enterprise contracts?",
+         ["get_policy_clause", "search_policy_documents"], "medium"),
+        ("What's the policy on payment-method changes mid-cycle?",
+         ["get_policy_clause", "search_policy_documents"], "low"),
+        ("Are API tokens counted as seats?",
+         ["get_policy_clause", "search_policy_documents", "get_plan_limits"], "low"),
+        ("What's the rule on suspending a single user vs. the whole account?",
+         ["get_policy_clause", "search_policy_documents"], "low"),
+    ]
+    for msg, tools, risk in msgs:
+        out.append(EvalCase(
+            id="",
+            category="text_saas_policy",
+            message=msg,
+            expected_tools=tools,
+            must_use_tool=True,
+            expected_domain="saas",
+            risk=risk,
+            notes="SaaS billing-policy question; expect a text-retrieval tool.",
+        ))
+    return out
+
+
+def _gen_text_support_policy(rng: random.Random, ids: SeedIds) -> list[EvalCase]:
+    """Support / SLA / escalation policy-text questions, plus resolution
+    template lookups."""
+    out: list[EvalCase] = []
+    sla_msgs: list[tuple[str, list[str]]] = [
+        ("When should a ticket be escalated?",
+         ["get_escalation_policy", "get_policy_clause", "search_policy_documents"]),
+        ("What does high priority mean?",
+         ["get_escalation_policy", "get_policy_clause"]),
+        ("What SLA applies to billing issues?",
+         ["get_escalation_policy", "get_policy_clause", "search_policy_documents"]),
+        ("Can support approve a refund directly?",
+         ["get_policy_clause", "search_policy_documents", "get_support_resolution_template"]),
+        ("Who has authority to waive a restocking fee?",
+         ["get_policy_clause", "search_policy_documents", "get_support_resolution_template"]),
+        ("What's the response-time SLA on urgent tickets?",
+         ["get_escalation_policy", "get_policy_clause"]),
+        ("When does a ticket get auto-escalated?",
+         ["get_escalation_policy", "get_policy_clause"]),
+        ("Can support create a refund without finance approval?",
+         ["get_policy_clause", "search_policy_documents", "get_support_resolution_template"]),
+        ("What's the policy on partial refunds?",
+         ["get_policy_clause", "search_policy_documents"]),
+        ("Do we have a 24/7 support SLA?",
+         ["get_policy_clause", "search_policy_documents", "get_escalation_policy"]),
+    ]
+    for msg, tools in sla_msgs:
+        out.append(EvalCase(
+            id="",
+            category="text_support_sla",
+            message=msg,
+            expected_tools=tools,
+            must_use_tool=True,
+            expected_domain="support",
+            risk="low",
+            notes="Support SLA / escalation policy question.",
+        ))
+
+    # Resolution-template lookups (operator-facing, by category).
+    templates: list[tuple[str, list[str]]] = [
+        ("Show me the support resolution template for refund_delay.",
+         ["get_support_resolution_template"]),
+        ("What's the standard response for a baggage_lost ticket?",
+         ["get_support_resolution_template"]),
+        ("Pull up the resolution template for shipment_delay.",
+         ["get_support_resolution_template"]),
+        ("What template do we use for billing_disputes?",
+         ["get_support_resolution_template"]),
+        ("Resolution template for warranty_claim?",
+         ["get_support_resolution_template"]),
+        ("Standard reply for downtime_apology?",
+         ["get_support_resolution_template"]),
+        ("Template for plan_downgrade requests?",
+         ["get_support_resolution_template"]),
+        ("Resolution template for delayed_flight compensation?",
+         ["get_support_resolution_template"]),
+        ("What's the standard response for cancellation_request tickets?",
+         ["get_support_resolution_template"]),
+        ("Show me the resolution template for return_refund.",
+         ["get_support_resolution_template"]),
+        ("Resolution template for missing_package?",
+         ["get_support_resolution_template"]),
+        ("Standard reply for plan_upgrade_assist?",
+         ["get_support_resolution_template"]),
+        ("Template for outage_apology messages?",
+         ["get_support_resolution_template"]),
+        ("Pull the resolution template for general_complaint.",
+         ["get_support_resolution_template"]),
+        ("What's our scripted response for refund_partial cases?",
+         ["get_support_resolution_template"]),
+    ]
+    for msg, tools in templates:
+        out.append(EvalCase(
+            id="",
+            category="text_support_template",
+            message=msg,
+            expected_tools=tools,
+            must_use_tool=True,
+            expected_domain="support",
+            risk="low",
+            notes="Resolution-template lookup by category.",
+        ))
+
+    # Escalation phrasing variants (each accepts get_support_resolution_template
+    # as a fair fallback since templates often describe escalation rules).
+    extras = [
+        ("How do we handle a complaint after 3 contacts with no resolution?",
+         ["get_escalation_policy", "get_policy_clause", "get_support_resolution_template"]),
+        ("What's the policy when a VIP customer is unhappy?",
+         ["get_escalation_policy", "get_policy_clause", "get_support_resolution_template"]),
+        ("What's the policy on apology credits?",
+         ["get_policy_clause", "search_policy_documents", "get_support_resolution_template"]),
+        ("Should I escalate this billing dispute?",
+         ["get_escalation_policy", "get_policy_clause", "get_support_resolution_template"]),
+        ("Is there a script for the apology call?",
+         ["get_support_resolution_template", "get_policy_clause"]),
+        ("What does our policy say about contacting customers proactively after an incident?",
+         ["get_policy_clause", "search_policy_documents", "get_support_resolution_template"]),
+        ("Is there a documented escalation path for repeat refund issues?",
+         ["get_escalation_policy", "get_policy_clause", "get_support_resolution_template"]),
+        ("What's the policy on transferring a ticket to another team?",
+         ["get_policy_clause", "search_policy_documents", "get_escalation_policy"]),
+        ("Do we have a documented holiday-season escalation policy?",
+         ["get_escalation_policy", "get_policy_clause", "search_policy_documents"]),
+    ]
+    for msg, tools in extras:
+        out.append(EvalCase(
+            id="",
+            category="text_support_sla",
+            message=msg,
+            expected_tools=tools,
+            must_use_tool=True,
+            expected_domain="support",
+            risk="low",
+            notes="Support escalation/template variant.",
+        ))
+    return out
+
+
+def _gen_text_internal_notes(rng: random.Random, ids: SeedIds) -> list[EvalCase]:
+    """Customer-specific internal-note lookups. With an id → notes tool;
+    without an id → clarification is acceptable."""
+    out: list[EvalCase] = []
+    custs = list(ids.customer_ids)
+    exts = list(ids.external_customer_ids)
+    # With identifier — must use the notes tool.
+    with_id_templates = [
+        "Was customer {cid} granted any exception before?",
+        "Are there any internal notes about customer {cid}?",
+        "Did support already promise customer id {cid} a refund?",
+        "Show me past internal notes for customer {cid}.",
+        "Any agent notes on the last complaint from customer id {cid}?",
+        "Pull internal notes for customer id {cid} — looking for prior exceptions.",
+        "Has customer id {cid} been flagged with any internal warnings?",
+        "What was the resolution noted on customer id {cid}'s last contact?",
+        "Are there any agent log entries on customer {cid} from the last month?",
+        "Did anyone on the team leave a note for customer id {cid}?",
+    ]
+    for tpl in with_id_templates:
+        cid = _take(custs, rng) if custs else 1
+        out.append(EvalCase(
+            id="",
+            category="text_internal_notes",
+            message=tpl.format(cid=cid),
+            expected_tools=[
+                "search_internal_agent_notes",
+                "get_customer_open_issues",
+            ],
+            must_use_tool=True,
+            expected_domain="crm",
+            risk="medium",
+            notes="Customer-specific note lookup with id.",
+            customer_id=cid,
+        ))
+    # With external customer code (e.g. CUST-XXXXX) — accept profile lookup
+    # as an alternative because resolving the internal id is a sensible step.
+    for _ in range(8):
+        ext = _take(exts, rng) if exts else "CUST-1000"
+        out.append(EvalCase(
+            id="",
+            category="text_internal_notes",
+            message=f"Any internal agent notes on {ext}?",
+            expected_tools=[
+                "search_internal_agent_notes",
+                "get_customer_profile",
+                "search_customer_records",
+            ],
+            must_use_tool=True,
+            expected_domain="crm",
+            risk="medium",
+            notes="External-id customer note lookup; a profile resolve is acceptable as a step.",
+        ))
+    # Customer-context questions where the conversation context has the id —
+    # phrased as "my" / "I" so the chatbot should fetch notes for the speaker.
+    # No id → clarification acceptable.
+    voice = [
+        "Was I granted any exception before?",
+        "Is there any internal note about my last complaint?",
+        "Did support already promise me a refund?",
+        "Has any agent noted something about my account?",
+        "Are there any internal flags on my account I should know about?",
+        "Did a previous rep leave a note about my issue?",
+    ]
+    for msg in voice:
+        out.append(EvalCase(
+            id="",
+            category="text_internal_notes",
+            message=msg,
+            expected_tools=[
+                "search_internal_agent_notes",
+                "get_customer_profile",
+            ],
+            must_use_tool=False,
+            expected_domain="crm",
+            risk="medium",
+            notes="No id supplied; clarification is acceptable.",
+            missing_context_expected=True,
+            clarification_acceptable=True,
+        ))
+    return out
+
+
+def _gen_text_incidents(rng: random.Random, ids: SeedIds) -> list[EvalCase]:
+    """Operational-incident questions (active outages, domain-scoped)."""
+    out: list[EvalCase] = []
+    msgs: list[tuple[str, list[str]]] = [
+        ("Are there any active incidents in airline operations?",
+         ["search_operational_incidents"]),
+        ("Any ongoing incident affecting SaaS billing?",
+         ["search_operational_incidents"]),
+        ("Is there a current outage on the commerce platform?",
+         ["search_operational_incidents"]),
+        ("What support incidents are active right now?",
+         ["search_operational_incidents"]),
+        ("Show me ongoing operational incidents.",
+         ["search_operational_incidents"]),
+        ("Are there service disruptions affecting customers today?",
+         ["search_operational_incidents"]),
+        ("Any incident impacting flight schedules?",
+         ["search_operational_incidents"]),
+        ("Active outage in the shipping pipeline?",
+         ["search_operational_incidents"]),
+        ("List operational incidents in the SaaS domain.",
+         ["search_operational_incidents"]),
+        ("Recent incidents in commerce — anything still open?",
+         ["search_operational_incidents"]),
+        ("Was there an incident affecting payment processing this week?",
+         ["search_operational_incidents"]),
+        ("Are there any incidents reported on airline check-in systems?",
+         ["search_operational_incidents"]),
+        ("Were there outages affecting outbound shipments yesterday?",
+         ["search_operational_incidents"]),
+        ("Any active customer-support tooling incidents?",
+         ["search_operational_incidents"]),
+        ("What's the latest on the API rate-limiting incident?",
+         ["search_operational_incidents"]),
+        ("Show open incidents tagged 'delay'.",
+         ["search_operational_incidents"]),
+        ("Any unresolved incidents with high impact?",
+         ["search_operational_incidents"]),
+        ("Are there service disruptions affecting commerce checkout?",
+         ["search_operational_incidents"]),
+        ("Open incidents involving airline boarding?",
+         ["search_operational_incidents"]),
+        ("Are there any outages we should mention to customers right now?",
+         ["search_operational_incidents"]),
+        ("Show me incidents that started in the last 24 hours.",
+         ["search_operational_incidents"]),
+        ("Any active incidents tagged 'login'?",
+         ["search_operational_incidents"]),
+        ("Anything happening with the SMS delivery system right now?",
+         ["search_operational_incidents"]),
+        ("Are there incidents impacting the warehouse pick-pack flow?",
+         ["search_operational_incidents"]),
+        ("Active outage on the customer-facing portal?",
+         ["search_operational_incidents"]),
+        ("Were there any incidents over the weekend we should know about?",
+         ["search_operational_incidents"]),
+        ("Open SaaS incidents tagged 'API'?",
+         ["search_operational_incidents"]),
+        ("Any commerce incidents in the last week?",
+         ["search_operational_incidents"]),
+        ("Are there active incidents affecting refunds?",
+         ["search_operational_incidents"]),
+        ("Any ongoing incident on the support phone line?",
+         ["search_operational_incidents"]),
+    ]
+    for msg, tools in msgs:
+        out.append(EvalCase(
+            id="",
+            category="text_incidents",
+            message=msg,
+            expected_tools=tools,
+            must_use_tool=True,
+            expected_domain="support",
+            risk="medium",
+            notes="Operational incident lookup; expect search_operational_incidents.",
+        ))
+
+    # Customer-specific: "was there an incident affecting MY shipment?"
+    # Without context it's ambiguous; clarification acceptable.
+    customer_voice = [
+        "Was there an incident affecting my shipment?",
+        "Is my order delayed because of a known outage?",
+        "Is there a known issue with my account access?",
+        "Are flights from JFK affected by any current incident?",
+    ]
+    for msg in customer_voice:
+        out.append(EvalCase(
+            id="",
+            category="text_incidents",
+            message=msg,
+            expected_tools=[
+                "search_operational_incidents",
+                "get_commerce_order_status",
+                "get_shipment_status",
+            ],
+            must_use_tool=False,
+            expected_domain="support",
+            risk="medium",
+            notes="Customer-voice incident question; clarification/route acceptable.",
+            missing_context_expected=True,
+            clarification_acceptable=True,
+        ))
+    return out
+
+
+def _gen_text_active_policy(rng: random.Random, ids: SeedIds) -> list[EvalCase]:
+    """Active / latest policy and version-listing questions across domains."""
+    out: list[EvalCase] = []
+    msgs: list[tuple[str, list[str], str]] = [
+        ("What's the current version of our refund policy for airline?",
+         ["get_active_policy", "list_policy_versions", "search_policy_documents"], "airline"),
+        ("Show me the active baggage policy.",
+         ["get_active_policy", "search_policy_documents", "get_baggage_policy"], "airline"),
+        ("Latest cancellation policy version, please.",
+         ["get_active_policy", "list_policy_versions", "search_policy_documents"], "airline"),
+        ("Pull the active SLA policy for SaaS.",
+         ["get_active_policy", "search_policy_documents"], "saas"),
+        ("What's the current return policy for commerce?",
+         ["get_active_policy", "search_policy_documents"], "commerce"),
+        ("Show all versions of the refund policy.",
+         ["list_policy_versions", "search_policy_documents"], "airline"),
+        ("List versions of the SaaS overage policy.",
+         ["list_policy_versions", "search_policy_documents"], "saas"),
+        ("How many versions has the warranty policy gone through?",
+         ["list_policy_versions", "search_policy_documents"], "commerce"),
+        ("What's the latest version of our escalation policy?",
+         ["get_active_policy", "list_policy_versions", "get_escalation_policy"], "support"),
+        ("Active warranty policy on the books?",
+         ["get_active_policy", "search_policy_documents"], "commerce"),
+        ("Show me the current SLA commitments.",
+         ["get_active_policy", "search_policy_documents", "get_policy_clause"], "saas"),
+        ("Get the active commerce return policy text.",
+         ["get_active_policy", "search_policy_documents"], "commerce"),
+        ("List all versions of the cancellation policy on file.",
+         ["list_policy_versions", "search_policy_documents"], "airline"),
+        ("Latest version of the airline irregular operations policy?",
+         ["get_active_policy", "list_policy_versions"], "airline"),
+        ("What's the current version of the support escalation policy?",
+         ["get_active_policy", "list_policy_versions", "get_escalation_policy"], "support"),
+    ]
+    for msg, tools, domain in msgs:
+        out.append(EvalCase(
+            id="",
+            category="text_active_policy",
+            message=msg,
+            expected_tools=tools,
+            must_use_tool=True,
+            expected_domain=domain,
+            risk="low",
+            notes="Active/version policy lookup.",
+        ))
+    return out
+
+
+def _gen_text_general_policy(rng: random.Random, ids: SeedIds) -> list[EvalCase]:
+    """Cross-cutting, domain-spanning policy questions that should route to
+    one of the text-retrieval tools (or KB as a fair fallback)."""
+    out: list[EvalCase] = []
+    msgs = [
+        "What does our refund policy actually say?",
+        "Summarise our cancellation policy in plain English.",
+        "What are the customer-facing rules around refunds?",
+        "Are there any exceptions to the cancellation policy I should know about?",
+        "What's the policy on price adjustments?",
+        "Are loyalty members exempt from any of these rules?",
+        "Where do I find the policy on accessibility accommodations?",
+        "What's the policy on duplicate charges?",
+        "Are there any company-wide policies on chargebacks?",
+        "Is there a published policy on data retention?",
+        "What's the policy on partial shipments?",
+        "Is there a documented policy on lost packages?",
+        "What are our rules for proactive refunds?",
+        "What's the policy on holiday-season returns?",
+        "What policies apply to enterprise customers specifically?",
+        "Show me any policy that mentions 'goodwill credit'.",
+        "What does the policy say about repeat issues?",
+        "Are there documented exceptions for VIP customers?",
+        "Where do I look up the rules for free replacements?",
+        "What's the policy on chargebacks for SaaS subscriptions?",
+        "Is there a policy on goodwill gestures for repeat customers?",
+        "Where do I find the rules on issuing store credit?",
+        "Are there guidelines on apologising for service failures?",
+        "What's our policy on refunding shipping fees?",
+        "Where is the policy on accepting late cancellations?",
+        "Is there a documented policy on free upgrades?",
+        "What's the rule on issuing partial credits?",
+        "Is there a policy on bulk-order returns?",
+        "What's the published policy on subscription pauses?",
+        "Are there guidelines on responding to social-media complaints?",
+    ]
+    for msg in msgs:
+        out.append(EvalCase(
+            id="",
+            category="text_general_policy",
+            message=msg,
+            expected_tools=_POLICY_TOOLS_GENERIC,
+            must_use_tool=True,
+            expected_domain="kb",
+            risk="low",
+            notes="Generic policy question; KB or policy docs acceptable.",
+        ))
+    return out
+
+
+def _gen_text_knowledge_phase_6b6(
+    rng: random.Random, ids: SeedIds
+) -> list[EvalCase]:
+    """Phase 6B-6 driver — concatenates all text-knowledge sub-generators."""
+    out: list[EvalCase] = []
+    out.extend(_gen_text_returns_commerce(rng, ids))
+    out.extend(_gen_text_warranty(rng, ids))
+    out.extend(_gen_text_airline_policy(rng, ids))
+    out.extend(_gen_text_saas_policy(rng, ids))
+    out.extend(_gen_text_support_policy(rng, ids))
+    out.extend(_gen_text_internal_notes(rng, ids))
+    out.extend(_gen_text_incidents(rng, ids))
+    out.extend(_gen_text_active_policy(rng, ids))
+    out.extend(_gen_text_general_policy(rng, ids))
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Driver
 # ---------------------------------------------------------------------------
 
@@ -3363,6 +4193,9 @@ def generate(session: Session, *, seed: int = 42) -> list[dict]:
     cases.extend(_gen_calculate_bundle_price(rng, ids))
     cases.extend(_gen_commerce_return_status_extra(rng, ids))
     cases.extend(_gen_customer_segment(rng, ids))
+    # Phase 6B-6 — textual-knowledge questions (returns, warranty, policy
+    # text, internal notes, incidents, active/version policy, SLA/escalation).
+    cases.extend(_gen_text_knowledge_phase_6b6(rng, ids))
     # Phase D2 — multi-step + bulk ambiguous/missing/adversarial + padding
     cases.extend(_gen_multi_step(rng, ids))
     cases.extend(_gen_d2_bulk_ambiguous(rng, ids))

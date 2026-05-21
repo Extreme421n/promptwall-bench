@@ -189,30 +189,32 @@ def test_create_support_ticket_draft_subject_too_short(seeded_session: Session) 
 
 
 def test_search_policy_documents_finds_baggage(seeded_session: Session) -> None:
+    # Phase 6B-4: queries the structured policy_documents table.
     out = search_policy_documents.call(seeded_session, {"query": "baggage"})
     assert out["count"] >= 1
-    assert all(d["category"] in {
-        "baggage", "refunds", "flight_change",
-        "cancellation", "loyalty", "special_assistance",
-    } for d in out["documents"])
+    for d in out["documents"]:
+        # Every result has the spec'd shape (id, title, domain, policy_type,
+        # version, excerpt, effective_from).
+        assert set(d) >= {
+            "id", "title", "domain", "policy_type",
+            "version", "excerpt", "effective_from",
+        }
 
 
-def test_search_policy_documents_with_category(seeded_session: Session) -> None:
+def test_search_policy_documents_with_policy_type(seeded_session: Session) -> None:
     out = search_policy_documents.call(
-        seeded_session, {"query": "refund", "category": "refunds"}
+        seeded_session, {"query": "refund", "policy_type": "refund_policy"}
     )
-    assert all(d["category"] == "refunds" for d in out["documents"])
+    assert out["count"] >= 1
+    assert all(d["policy_type"] == "refund_policy" for d in out["documents"])
 
 
-def test_search_policy_documents_non_policy_category_returns_empty(
-    seeded_session: Session,
-) -> None:
-    """`check_in` exists in the KB but is not a policy category — so this
-    search must return no rows, not 404."""
+def test_search_policy_documents_with_domain(seeded_session: Session) -> None:
     out = search_policy_documents.call(
-        seeded_session, {"query": "check", "category": "check_in"}
+        seeded_session, {"query": "policy", "domain": "saas"}
     )
-    assert out["count"] == 0
+    # SaaS domain has policy_documents in the seed.
+    assert all(d["domain"] == "saas" for d in out["documents"])
 
 
 def test_search_policy_documents_missing_query(seeded_session: Session) -> None:

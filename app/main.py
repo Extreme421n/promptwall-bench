@@ -18,9 +18,11 @@ from decimal import Decimal
 from typing import Any, Literal, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.db import get_session
 from app.llm import get_provider
 from app.services import ChatService, ToolExecutor
@@ -31,6 +33,31 @@ app = FastAPI(
     title="PromptWall Benchmark API",
     description="Phase 1E: tool registry + trace-logged execution.",
     version="0.1.0",
+)
+
+
+# ---------------------------------------------------------------------------
+# CORS — frontend integration
+# ---------------------------------------------------------------------------
+#
+# Allowed origins come from the ``CORS_ORIGINS`` env var (comma-separated),
+# falling back to a sensible localhost dev allow-list. Use ``CORS_ORIGINS=*``
+# during development to allow any origin (not recommended in production).
+_cors_origins = settings.cors_origins
+_cors_allow_credentials = True
+if _cors_origins == ["*"]:
+    # The CORS spec forbids ``Access-Control-Allow-Credentials: true`` with
+    # a wildcard origin. Honour the wildcard and disable credentials so the
+    # combination is valid.
+    _cors_allow_credentials = False
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins,
+    allow_credentials=_cors_allow_credentials,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 

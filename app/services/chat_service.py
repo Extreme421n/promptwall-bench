@@ -42,7 +42,22 @@ from app.services.trace_service import TraceService
 from app.tools import default_registry
 from app.tools.base import ToolRegistry
 
-BASELINE_SYSTEM_PROMPT = (
+# ---------------------------------------------------------------------------
+# Baseline system prompts
+# ---------------------------------------------------------------------------
+#
+# Phase 6B-5: the baseline chatbot is now aware of the textual-retrieval tools
+# added in Phase 6B-4 (policy documents, return rules, warranty terms, internal
+# agent notes, operational incidents, support resolution templates). The v1
+# prompt is preserved verbatim so we can A/B against the older behaviour;
+# ``BASELINE_SYSTEM_PROMPT`` itself now points at v2 so existing call-sites
+# pick up the new guidance automatically.
+#
+# IMPORTANT: this is *just* a prompt change. We do not force tool usage and we
+# do not pre-execute tools — that is PromptWall's job. The baseline chatbot
+# still chooses whether to call a tool based on the LLM's own decision.
+
+BASELINE_SYSTEM_PROMPT_V1 = (
     "You are a helpful airline customer support assistant. You have access to "
     "tools. Use tools whenever the user asks about customer-specific, "
     "booking-specific, flight-specific, refund-specific, ticket-specific, "
@@ -50,6 +65,41 @@ BASELINE_SYSTEM_PROMPT = (
     "information is missing, ask a clarification question. Do not invent IDs, "
     "prices, dates, statuses, refund amounts, gates, or policy details."
 )
+
+BASELINE_SYSTEM_PROMPT_V2_TEXT_KNOWLEDGE = (
+    "You are a helpful enterprise customer-support assistant covering airline, "
+    "SaaS billing, e-commerce, and CRM domains. You have access to a tool "
+    "registry. Use tools for any dynamic or company-specific information — do "
+    "not answer from general knowledge when a tool can give you the real "
+    "answer.\n\n"
+    "Use policy and document tools when the user asks about: rules, returns, "
+    "refunds, warranties, cancellation, baggage, overage billing, SLA, "
+    "escalation, exceptions, eligibility, internal agent notes, or "
+    "operational incidents. Relevant tools include search_policy_documents, "
+    "get_policy_clause, get_active_policy, list_policy_versions, "
+    "search_return_rules, get_product_warranty_terms, "
+    "search_internal_agent_notes, search_operational_incidents, and "
+    "get_support_resolution_template.\n\n"
+    "Do not invent: policy details, return windows, warranty exclusions, "
+    "refund eligibility, SLA commitments, overage rules, customer-specific "
+    "exceptions, internal notes, IDs, prices, dates, statuses, refund "
+    "amounts, or gate numbers. If context is missing (a customer id, booking "
+    "reference, SKU, ticket number, policy domain, etc.), ask a clarification "
+    "question rather than guessing."
+)
+
+# The active baseline prompt. Bump this (and ``BASELINE_PROMPT_VERSION``)
+# together when the prompt changes; the version string lands in every
+# trace's metadata so we can compare runs across prompt revisions.
+BASELINE_PROMPT_VERSION = "baseline_v2_text_knowledge"
+BASELINE_SYSTEM_PROMPT = BASELINE_SYSTEM_PROMPT_V2_TEXT_KNOWLEDGE
+
+# Lookup so callers (tests, benchmark harness) can resolve a version string to
+# its prompt text without poking at private state.
+BASELINE_PROMPTS: dict[str, str] = {
+    "baseline_v1": BASELINE_SYSTEM_PROMPT_V1,
+    "baseline_v2_text_knowledge": BASELINE_SYSTEM_PROMPT_V2_TEXT_KNOWLEDGE,
+}
 
 # Modes that should produce identical behaviour to baseline. The chat service
 # treats them the same; the only thing that changes is which observability
@@ -118,12 +168,21 @@ class ChatService:
         t0 = time.perf_counter()
 
         chat = self._resolve_chat_session(session_uuid, customer_id)
+
+        # Phase 6B-5: stamp every trace with the prompt version that drove the
+        # baseline turn. We merge into a copy so the caller's metadata dict is
+        # never mutated. The chatbot still does the same thing — the version
+        # field just makes prompt revisions auditable from the trace store.
+        trace_metadata: dict[str, Any] = dict(metadata or {})
+        trace_metadata.setdefault("prompt_version", BASELINE_PROMPT_VERSION)
+        trace_metadata.setdefault("prompt_name", "baseline_system_prompt")
+
         trace = self.trace_service.create_trace(
             session_id=chat.id,
             user_message=message,
             mode=mode,
             customer_id=customer_id,
-            metadata=metadata,
+            metadata=trace_metadata,
         )
         self.session.commit()
 

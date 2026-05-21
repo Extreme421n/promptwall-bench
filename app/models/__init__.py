@@ -29,6 +29,15 @@ from app.models.commerce import (
 from app.models.crm import Customer, LoyaltyAccount
 from app.models.evaluation import EvaluationResult, EvaluationRun
 from app.models.kb import KBArticle
+from app.models.knowledge import (
+    InternalAgentNote,
+    OperationalIncident,
+    PolicyClause,
+    PolicyDocument,
+    ProductReturnRule,
+    ProductWarrantyTerms,
+    SupportResolutionTemplate,
+)
 from app.models.observability import ChatSession, LLMCall, ToolInvocation, Trace
 from app.models.promptwall import PromptWallCandidateDecision
 from app.models.saas import (
@@ -95,4 +104,12 @@ __all__ = [
     "Shipment",
     "CommerceReturn",
     "CommerceRefund",
+    # Textual knowledge (Phase 6B-1)
+    "PolicyDocument",
+    "PolicyClause",
+    "ProductWarrantyTerms",
+    "ProductReturnRule",
+    "InternalAgentNote",
+    "OperationalIncident",
+    "SupportResolutionTemplate",
 ]
