@@ -51,7 +51,7 @@ interface ChatSettings {
 
 const DEFAULT_SETTINGS: ChatSettings = {
   mode: "baseline",
-  model: "mock",
+  model: "gpt-4o-mini",
   customerId: "",
   useCase: "demo_frontend",
 };
